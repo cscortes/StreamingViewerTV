@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StreamingViewerTV</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css?v=4" />
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>
+  <script src="/static/app.js?v=5" defer></script>
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand-block">
+      <p class="brand">StreamingViewerTV</p>
+    </div>
+  </header>
+
+  <section class="filter-bar" id="filterBar">
+    <div class="search-wrap">
+      <input id="searchInput" type="search" placeholder="Search channels…" autocomplete="off" />
+    </div>
+
+    <form id="filterForm" class="filters" aria-label="Stream filters">
+      {% for field, meta in filters.items() %}
+      <div class="filter-group">
+        <label for="filter-{{ field }}">
+          {% if meta.hint %}{{ meta.label }} ({{ meta.hint }}){% else %}{{ meta.label }}{% endif %}
+        </label>
+        <select id="filter-{{ field }}" name="{{ field }}">
+          <option value="">Any {{ meta.label|lower }}</option>
+          {% for option in meta.options %}
+          <option value="{{ option.value }}">{{ option.label }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endfor %}
+    </form>
+
+    <div class="filter-bar-meta">
+      <button type="button" class="ghost-btn reset-btn" id="resetFiltersBtn">Reset</button>
+    </div>
+  </section>
+
+  <main class="layout" id="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="stream-list-wrap" id="streamListWrap">
+        <ul id="streamList" class="stream-list"></ul>
+        <div id="listSentinel" class="list-sentinel" aria-hidden="true"></div>
+      </div>
+    </aside>
+
+    <div
+      class="splitter"
+      id="splitter"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      tabindex="0"
+    ></div>
+
+    <section class="stage" id="stage">
+      <div class="player-shell" id="playerShell">
+        <div class="player-frame" id="playerFrame">
+          <video id="video" controls playsinline></video>
+          <div class="player-empty" id="playerEmpty">
+            <p class="empty-kicker">Now playing</p>
+            <h1>Pick a stream</h1>
+            <p>Filter by category, country, language, or quality — then select a channel to watch.</p>
+          </div>
+        </div>
+
+        <div class="now-playing" id="nowPlaying" hidden>
+          <div class="now-meta">
+            <img id="nowLogo" alt="" hidden />
+            <div>
+              <div class="now-title-row">
+                <h2 id="nowTitle">—</h2>
+                <span class="now-programme" id="nowProgramme" data-state="empty">No data</span>
+                <span class="quality-stars" id="nowStars" hidden aria-label=""></span>
+              </div>
+              <p id="nowDetails">—</p>
+            </div>
+          </div>
+          <div class="view-controls">
+            <button type="button" class="solid-btn" id="theaterBtn">Theater</button>
+            <button type="button" class="solid-btn" id="fullscreenBtn">Fullscreen</button>
+            <a class="ghost-btn" id="openRaw" href="#" target="_blank" rel="noopener">Open URL</a>
+          </div>
+        </div>
+        <p class="player-status" id="playerStatus" hidden></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="status-bar" id="statusBar" aria-live="polite">
+    <div class="status-group">
+      <span class="status-item"><span class="status-label">Streams</span> <strong id="statusCatalog">0</strong></span>
+      <span class="status-item"><span class="status-label">Matches</span> <strong id="statusMatches">0</strong></span>
+      <span class="status-item"><span class="status-label">Listed</span> <strong id="statusListed">0</strong></span>
+      <span class="status-item"><span class="status-label">tvg_id</span> <strong id="statusTvg">0</strong></span>
+      <span class="status-item status-guide">
+        <span class="status-dot" id="statusGuideDot" data-state="idle"></span>
+        <span class="status-label">Guide</span>
+        <strong id="statusGuide">Idle</strong>
+      </span>
+    </div>
+    <div class="status-group status-group-playback">
+      <span class="status-item status-playback">
+        <span class="status-dot" id="statusDot" data-state="idle"></span>
+        <span class="status-label">Playback</span>
+        <strong id="statusPlayback">Idle</strong>
+      </span>
+      <span class="status-item"><span class="status-label">Errors</span> <strong id="statusErrors">0</strong></span>
+      <span class="status-item status-message" id="statusMessage" title="">Ready</span>
+      <span class="status-item status-version"><span class="status-label">v</span><strong>{{ version }}</strong></span>
+    </div>
+  </footer>
+</body>
+</html>

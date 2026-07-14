@@ -1,0 +1,121 @@
+name: Release
+
+# Push a tag like v0.1.0 to build a fresh catalog, package the Windows and
+# Linux desktop builds around it, and attach both archives to a GitHub
+# Release for that tag. The tag must match stream_viewer/_version.py.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify tag matches stream_viewer/_version.py
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          code_version="$(grep -oP '(?<=__version__ = ")[^"]+' stream_viewer/_version.py)"
+          if [ "$tag_version" != "$code_version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match stream_viewer/_version.py (${code_version})." >&2
+            exit 1
+          fi
+          echo "Tag matches code version: ${code_version}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --repo "${{ github.repository }}"
+
+  build-catalog:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - run: uv sync
+
+      - name: Build viewer.db (no probe, keeps CI fast)
+        run: uv run stream-viewer-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: viewer-db
+          path: iptv_export/viewer.db
+          retention-days: 1
+
+  build-windows:
+    needs: [prepare-release, build-catalog]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - run: uv sync --group packaging
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: viewer-db
+          path: iptv_export
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller packaging/streaming_viewer_tv.spec
+
+      - name: Assemble release folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/StreamingViewerTV/iptv_export | Out-Null
+          Copy-Item iptv_export/viewer.db dist/StreamingViewerTV/iptv_export/viewer.db
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/StreamingViewerTV -DestinationPath "StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip" --repo "${{ github.repository }}"
+
+  build-linux:
+    needs: [prepare-release, build-catalog]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - run: uv sync --group packaging
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: viewer-db
+          path: iptv_export
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller packaging/streaming_viewer_tv.spec
+
+      - name: Assemble release folder
+        run: |
+          mkdir -p dist/StreamingViewerTV/iptv_export
+          cp iptv_export/viewer.db dist/StreamingViewerTV/iptv_export/viewer.db
+          chmod +x dist/StreamingViewerTV/StreamingViewerTV
+
+      - name: Tar (preserves the executable bit; zip on Linux doesn't reliably)
+        run: tar czf "StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz" -C dist StreamingViewerTV
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz" --repo "${{ github.repository }}"

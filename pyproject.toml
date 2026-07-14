@@ -1,0 +1,46 @@
+[project]
+name = "streaming-viewer-tv"
+dynamic = ["version"]
+description = "Build an IPTV catalog DB and browse/play streams locally"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "jinja2>=3.1.0",
+    "httpx2>=2.0.0",
+]
+
+[project.scripts]
+stream-viewer-build = "builder.prepare_db:main"
+stream-viewer = "stream_viewer.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "respx>=0.23.1",
+    "playwright>=1.49.0",
+    "pytest-playwright>=0.6.2",
+]
+packaging = [
+    "pyinstaller>=6.11.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "stream_viewer/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["builder", "stream_viewer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "live: hits real IPTV URLs over the network (deselected by default)",
+    "ui: browser UI checks via Playwright (Chromium)",
+]
+addopts = "-m 'not live'"

@@ -1,0 +1,19 @@
+# Generated / downloaded data — keep dirs via .gitkeep only
+iptv_export/**
+!iptv_export/.gitkeep
+!iptv_export/epg/
+!iptv_export/epg/.gitkeep
+!iptv_export/epg_channels/
+!iptv_export/epg_channels/.gitkeep
+
+.epg_tools/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.python-version
+.pytest_cache/
