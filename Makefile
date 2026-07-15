@@ -5,14 +5,17 @@
 #   make probe         # HLS probe → streams_probed.csv
 #   make build-probed  # full pipeline including probe (slow)
 #   make run           # start the FastAPI UI
+#   make bundle-linux    # PyInstaller onedir build — must run on Linux
+#   make bundle-windows  # PyInstaller onedir build — must run on Windows
 #   make clean         # remove generated data under iptv_export/
 #   make test          # run all tests including Playwright UI (must pass)
 
-.PHONY: info build build-probed probe run sync clean test help
+.PHONY: info build build-probed probe run sync clean test help bundle-linux bundle-windows
 
 UV ?= uv
 EXPORT := iptv_export
 DB := $(EXPORT)/viewer.db
+DIST := dist/StreamingViewerTV
 
 # Probe knobs (override on the command line):
 #   make probe LIMIT=50
@@ -34,6 +37,8 @@ info help:
 	@echo "  make build-probed  Build DB including probe (slow for full catalog)"
 	@echo "  make run           Start viewer UI"
 	@echo "  make sync          Install/update deps (uv sync)"
+	@echo "  make bundle-linux    Build a onedir desktop bundle — must run on Linux"
+	@echo "  make bundle-windows  Build a onedir desktop bundle — must run on Windows"
 	@echo "  make clean         Remove generated data under $(EXPORT)/"
 	@echo "  make test          Run all tests including Playwright UI (must pass)"
 	@echo ""
@@ -101,6 +106,41 @@ run: sync
 		exit 1; \
 	fi
 	$(UV) run stream-viewer
+
+# PyInstaller can't cross-compile: a Linux binary must be built on Linux, and a
+# Windows .exe must be built on Windows. Same spec is used for both — see
+# packaging/streaming_viewer_tv.spec. This is what .github/workflows/release.yml
+# does too, just on separate CI runners instead of one machine.
+bundle-linux:
+	@case "$$(uname -s 2>/dev/null)" in \
+		Linux) ;; \
+		*) echo "bundle-linux must run on Linux (PyInstaller can't cross-compile). Run bundle-windows on Windows, or push a version tag and let .github/workflows/release.yml build both."; exit 1 ;; \
+	esac
+	$(UV) sync --group packaging
+	$(UV) run pyinstaller --noconfirm packaging/streaming_viewer_tv.spec
+	@mkdir -p $(DIST)/iptv_export
+	@if [ -f "$(DB)" ]; then \
+		cp "$(DB)" $(DIST)/iptv_export/viewer.db; \
+	else \
+		echo "[warn] $(DB) missing — bundle has no catalog; run: make build"; \
+	fi
+	@chmod +x $(DIST)/StreamingViewerTV
+	@echo "Bundled: $(DIST)/  (run: $(DIST)/StreamingViewerTV)"
+
+bundle-windows:
+	@case "$$(uname -s 2>/dev/null)" in \
+		MINGW*|MSYS*|CYGWIN*) ;; \
+		*) echo "bundle-windows must run on Windows (Git Bash/MSYS make) — PyInstaller can't cross-compile from $$(uname -s 2>/dev/null || echo this OS). Run bundle-linux here, or push a version tag and let .github/workflows/release.yml build both."; exit 1 ;; \
+	esac
+	$(UV) sync --group packaging
+	$(UV) run pyinstaller --noconfirm packaging/streaming_viewer_tv.spec
+	@mkdir -p $(DIST)/iptv_export
+	@if [ -f "$(DB)" ]; then \
+		cp "$(DB)" $(DIST)/iptv_export/viewer.db; \
+	else \
+		echo "[warn] $(DB) missing — bundle has no catalog; run: make build"; \
+	fi
+	@echo "Bundled: $(DIST)/  (run: $(DIST)/StreamingViewerTV.exe)"
 
 clean:
 	@echo "Removing generated files under $(EXPORT)/ …"

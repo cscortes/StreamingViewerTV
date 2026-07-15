@@ -15,6 +15,8 @@
 | BUG-011 | 2026-07-13 | Category filter not visible; catalog must have categories with stream items. | Fixed | 2026-07-13 |
 | BUG-012 | 2026-07-13 | Category filters still missing in UI because they were JS-only into an empty form. | Fixed | 2026-07-13 |
 | FEAT-001 | 2026-07-13 | Show “what’s on now” (EPG title) in the sidebar and player when available. | Done | 2026-07-13 |
+| BUG-013 | 2026-07-14 | `stream-viewer-build` crashes with `NameError` right after writing `viewer.db`, so the build reports failure despite succeeding. | Fixed | 2026-07-14 |
+| FEAT-002 | 2026-07-14 | Windows/Linux desktop packaging (PyInstaller) with automated GitHub Releases; visible semantic version in the status bar. | Done | 2026-07-14 |
 
 ## Details
 
@@ -280,3 +282,50 @@ Playwright (must catch UI regressions): `tests/test_ui_filters_playwright.py::te
   - Optional local XMLTV in `iptv_export/epg/` keyed by `tvg_id` (imported at build).
   - Status bar shows `tvg_id` coverage and Guide Idle/Loaded.
   - Docs: README “What’s on now (EPG)” + this file.
+
+### BUG-013 — `stream-viewer-build` crashes after writing `viewer.db`
+
+- **Reported:** 2026-07-14
+- **Status:** Fixed
+- **Fixed:** 2026-07-14
+- **Symptom:** `uv run stream-viewer-build` (and `make build`) printed `wrote iptv_export/viewer.db (...)` — the DB was written correctly — then crashed with `NameError: name 'stream_count' is not defined` while printing the final `=== Ready ===` summary. The command exits non-zero despite the build having actually succeeded, which would fail any automation (CI release workflow, scripts) that checks the exit code.
+- **Cause:** `builder/prepare_db.py` calls `stream_count(conn)` / `programme_count(conn)` in `main()`, but only `connect` and `db_status` were imported from `stream_viewer.db`.
+- **Fix:** Import `programme_count` and `stream_count` alongside `connect`/`db_status` in `builder/prepare_db.py`.
+
+#### AI instructions (regression workflow)
+
+1. **Reproduce with a failing test first**
+   - `tests/test_prepare_db.py` monkeypatches `builder.paths` / `builder.prepare_db` module-level path constants (`EXPORT_DIR`, `VIEWER_DB`, `EPG_DIR`, etc., plus `STREAM_CSV_CANDIDATES`) to a `tmp_path`, seeds a minimal `streams.csv` + `epg/*.xml`, then calls `prepare_db.main(["--skip-download"])` — fully offline, no network.
+   - Temporarily drop the import (`from stream_viewer.db import connect, db_status` only) and confirm both tests in that file fail with the exact original `NameError`. Do not proceed until that failure is observed.
+
+2. **Implement the fix**
+   - Restore the full import line in `builder/prepare_db.py`.
+
+3. **Verify the same tests now pass**
+   - `uv run pytest tests/test_prepare_db.py`
+   - Manual: `uv run stream-viewer-build --skip-download` (with local CSV/EPG already present) must print `=== Ready ===` and exit 0.
+
+4. **Do not mark fixed** until step 3’s regression test is green.
+
+Canonical tests: `tests/test_prepare_db.py::test_prepare_db_main_completes_without_crashing`, `tests/test_prepare_db.py::test_prepare_db_module_imports_count_helpers`.
+
+### FEAT-002 — Windows/Linux packaging, GitHub Releases, visible version
+
+- **Reported:** 2026-07-14
+- **Status:** Done
+- **Fixed:** 2026-07-14
+- **Notes:**
+  - `stream_viewer/_version.py` is the single source of truth for the app version (starts at `0.1.0`); `pyproject.toml` reads it dynamically. Shown in the status bar and in `FastAPI(version=...)`.
+  - `stream_viewer/app.py:resolve_app_paths()` makes path resolution frozen-build-aware: `viewer.db` lives next to the executable (persists across updates); bundled `static`/`templates` resolve under PyInstaller’s `_MEIPASS`.
+  - `main()` launches uvicorn with the app object directly (not an import string) and auto-opens the default browser (`STREAM_VIEWER_NO_BROWSER=1` to opt out).
+  - `packaging/streaming_viewer_tv.spec` + `stream_viewer/launcher.py` build a onedir bundle for both Windows and Linux (verified locally end-to-end: built the Linux bundle, ran it with a real `viewer.db`, confirmed it served the UI and status bar showed the version).
+  - `.github/workflows/release.yml`: on a `vX.Y.Z` tag push, verifies the tag matches `_version.py`, builds the catalog once, packages Windows (`.zip`) and Linux (`.tar.gz`) builds, and attaches both to the GitHub Release.
+  - Bump policy (semver): patch digit per `BUG-XXX` fix, minor digit per `FEAT-XXX` feature — documented in README “Versioning”.
+
+#### AI instructions (regression workflow)
+
+1. Assert `stream_viewer/app.py` exposes `resolve_app_paths()` and that dev-mode / frozen-mode resolution differ as expected — `tests/test_frozen_paths.py`.
+2. Assert the rendered `index.html` shows the current `stream_viewer._version.__version__` in the status bar — `tests/test_known_issues.py::test_index_html_shows_current_version_in_status_bar`.
+3. If packaging changes, rebuild locally (`uv run pyinstaller packaging/streaming_viewer_tv.spec`) and smoke-test the resulting binary with a real `viewer.db` dropped next to it before trusting CI.
+
+Canonical tests: `tests/test_frozen_paths.py`, `tests/test_known_issues.py::test_index_html_shows_current_version_in_status_bar`.
