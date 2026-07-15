@@ -234,10 +234,23 @@ Bump it with each change, per [semver](https://semver.org/):
 - **Patch** (`0.1.0` → `0.1.1`) for a `BUG-XXX` fix in [buglist.md](buglist.md)
 - **Minor** (`0.1.0` → `0.2.0`) for a `FEAT-XXX` feature in [buglist.md](buglist.md)
 
-To publish a release, push a matching tag — the [release workflow](.github/workflows/release.yml)
-checks that the tag equals `_version.py`'s value before building anything:
+To publish a release, push a matching tag:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+The [release workflow](.github/workflows/release.yml) then runs this pipeline:
+
+1. **`test`** and **`check-version`** run in parallel: the full test suite (incl. Playwright)
+   must pass, and the tag must equal `_version.py`'s value with no existing release for that
+   tag already — either failing stops everything immediately (and marks the run red, which
+   triggers GitHub's default failure notification to whoever pushed the tag).
+2. **`build-catalog`** builds a fresh `viewer.db`.
+3. **`build-windows`** and **`build-linux`** package that catalog into the two desktop bundles, in parallel.
+4. **`publish-release`** only runs once *both* bundles succeed — it creates the GitHub Release
+   for that tag with both archives attached. If either platform build fails, no release is created.
+
+Every push/PR to `main` also runs the [CI workflow](.github/workflows/ci.yml) — the same full
+test suite, independent of any release — so regressions surface long before you get to tagging.

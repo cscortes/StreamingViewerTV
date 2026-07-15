@@ -1,8 +1,20 @@
 name: Release
 
-# Push a tag like v0.1.0 to build a fresh catalog, package the Windows and
-# Linux desktop builds around it, and attach both archives to a GitHub
-# Release for that tag. The tag must match stream_viewer/_version.py.
+# Push a tag like v0.1.0 to run the full test suite, verify the version is new,
+# build the Windows and Linux desktop bundles around a freshly built catalog,
+# and — only once both bundles succeed — publish a GitHub Release for that tag
+# with both archives attached.
+#
+# Pipeline:
+#   test ----------\
+#                    -> build-catalog -> build-windows -\
+#   check-version -/                  -> build-linux   -> publish-release
+#
+# `test` and `check-version` run in parallel and both gate everything else, so
+# a duplicate/mismatched version fails fast without waiting on the full test
+# run, and a test failure blocks the release before anything is built. Either
+# failing marks the workflow run red, which triggers GitHub's default
+# workflow-failure notification to whoever pushed the tag.
 on:
   push:
     tags:
@@ -12,7 +24,20 @@ permissions:
   contents: write
 
 jobs:
-  prepare-release:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - run: uv sync --group dev
+
+      - run: uv run playwright install --with-deps chromium
+
+      - run: uv run pytest -q --tb=short
+
+  check-version:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -22,22 +47,23 @@ jobs:
           tag_version="${GITHUB_REF_NAME#v}"
           code_version="$(grep -oP '(?<=__version__ = ")[^"]+' stream_viewer/_version.py)"
           if [ "$tag_version" != "$code_version" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match stream_viewer/_version.py (${code_version})." >&2
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match stream_viewer/_version.py (${code_version}). Bump _version.py to match before tagging."
             exit 1
           fi
           echo "Tag matches code version: ${code_version}"
 
-      - name: Create GitHub release
+      - name: Verify this version hasn't been released before
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            --repo "${{ github.repository }}"
+          if gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::A release for ${GITHUB_REF_NAME} already exists. Bump stream_viewer/_version.py to a new version and tag again."
+            exit 1
+          fi
+          echo "No existing release for ${GITHUB_REF_NAME} — clear to proceed."
 
   build-catalog:
-    needs: prepare-release
+    needs: [test, check-version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -56,7 +82,7 @@ jobs:
           retention-days: 1
 
   build-windows:
-    needs: [prepare-release, build-catalog]
+    needs: build-catalog
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -71,9 +97,9 @@ jobs:
           path: iptv_export
 
       - name: Build with PyInstaller
-        run: uv run pyinstaller packaging/streaming_viewer_tv.spec
+        run: uv run pyinstaller --noconfirm packaging/streaming_viewer_tv.spec
 
-      - name: Assemble release folder
+      - name: Assemble bundle folder
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/StreamingViewerTV/iptv_export | Out-Null
@@ -83,13 +109,14 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist/StreamingViewerTV -DestinationPath "StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip"
 
-      - name: Upload to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" "StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip" --repo "${{ github.repository }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-bundle
+          path: StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip
+          retention-days: 1
 
   build-linux:
-    needs: [prepare-release, build-catalog]
+    needs: build-catalog
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -104,9 +131,9 @@ jobs:
           path: iptv_export
 
       - name: Build with PyInstaller
-        run: uv run pyinstaller packaging/streaming_viewer_tv.spec
+        run: uv run pyinstaller --noconfirm packaging/streaming_viewer_tv.spec
 
-      - name: Assemble release folder
+      - name: Assemble bundle folder
         run: |
           mkdir -p dist/StreamingViewerTV/iptv_export
           cp iptv_export/viewer.db dist/StreamingViewerTV/iptv_export/viewer.db
@@ -115,7 +142,33 @@ jobs:
       - name: Tar (preserves the executable bit; zip on Linux doesn't reliably)
         run: tar czf "StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz" -C dist StreamingViewerTV
 
-      - name: Upload to release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-bundle
+          path: StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz
+          retention-days: 1
+
+  publish-release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-bundle
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-bundle
+
+      - name: Create GitHub release with both bundles attached
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" "StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz" --repo "${{ github.repository }}"
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "StreamingViewerTV-${GITHUB_REF_NAME}-windows-x64.zip" \
+            "StreamingViewerTV-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --repo "${{ github.repository }}"
