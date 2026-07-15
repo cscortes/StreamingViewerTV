@@ -218,23 +218,33 @@ Bump it with each change, per [semver](https://semver.org/):
 - **Patch** (`0.1.0` → `0.1.1`) for a `BUG-XXX` fix in [buglist.md](buglist.md)
 - **Minor** (`0.1.0` → `0.2.0`) for a `FEAT-XXX` feature in [buglist.md](buglist.md)
 
-To publish a release, push a matching tag:
+Releases are automatic — just bump `_version.py` and merge/push to `main`. No manual tagging
+step needed. The [release workflow](.github/workflows/release.yml) runs this pipeline:
+
+1. **`plan`** reads `stream_viewer/_version.py` and checks whether a release for that version
+   already exists.
+   - Pushed to `main` and the version is unchanged (no new release needed): every other job
+     is skipped and the run finishes green — no noise for routine pushes.
+   - Pushed to `main` with a bumped version, **or** you manually pushed a `vX.Y.Z` tag: the
+     rest of the pipeline runs. A manually-pushed tag is additionally validated — it must
+     exactly match `_version.py`, and must not already have a release — failing loudly
+     (triggers GitHub's default failure notification) if not.
+2. **`test`** runs the full suite (incl. Playwright); a failure stops everything.
+3. **`build-catalog`** builds a fresh `viewer.db`, including a full HLS probe of every
+   stream (same as `make build-probed`) so releases ship with `stream_quality` grades,
+   not just unprobed metadata.
+4. **`build-windows`** and **`build-linux`** package that catalog into the two desktop bundles, in parallel.
+5. **`publish-release`** only runs once *both* bundles succeed — it creates the GitHub Release
+   (and the underlying `vX.Y.Z` tag, which doesn't need to exist beforehand) with both
+   archives attached. If either platform build fails, no release is created.
+
+Prefer to tag manually instead (e.g. for a hotfix off a non-`main` ref)? That still works:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The [release workflow](.github/workflows/release.yml) then runs this pipeline:
-
-1. **`test`** and **`check-version`** run in parallel: the full test suite (incl. Playwright)
-   must pass, and the tag must equal `_version.py`'s value with no existing release for that
-   tag already — either failing stops everything immediately (and marks the run red, which
-   triggers GitHub's default failure notification to whoever pushed the tag).
-2. **`build-catalog`** builds a fresh `viewer.db`.
-3. **`build-windows`** and **`build-linux`** package that catalog into the two desktop bundles, in parallel.
-4. **`publish-release`** only runs once *both* bundles succeed — it creates the GitHub Release
-   for that tag with both archives attached. If either platform build fails, no release is created.
-
 Every push/PR to `main` also runs the [CI workflow](.github/workflows/ci.yml) — the same full
-test suite, independent of any release — so regressions surface long before you get to tagging.
+test suite, independent of any release — so regressions surface immediately, before `plan`
+even has a chance to decide whether to release.

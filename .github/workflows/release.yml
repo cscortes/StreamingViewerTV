@@ -1,22 +1,27 @@
 name: Release
 
-# Push a tag like v0.1.0 to run the full test suite, verify the version is new,
-# build the Windows and Linux desktop bundles around a freshly built catalog,
-# and — only once both bundles succeed — publish a GitHub Release for that tag
-# with both archives attached.
+# Two ways to ship a release:
+#
+#   1. Automatic: push to main with a bumped stream_viewer/_version.py. The
+#      `plan` job notices the version has no release yet and runs the full
+#      pipeline, creating the vX.Y.Z tag (via `gh release create`) once
+#      everything else has succeeded.
+#   2. Manual: push a `vX.Y.Z` tag yourself. `plan` then strictly validates
+#      the tag matches `_version.py` and that no release for it exists yet,
+#      failing fast (and loudly) if not.
 #
 # Pipeline:
-#   test ----------\
-#                    -> build-catalog -> build-windows -\
-#   check-version -/                  -> build-linux   -> publish-release
+#   plan -> test -----------\
+#        \                   -> build-catalog -> build-windows -\
+#         -----------------/                  -> build-linux   -> publish-release
 #
-# `test` and `check-version` run in parallel and both gate everything else, so
-# a duplicate/mismatched version fails fast without waiting on the full test
-# run, and a test failure blocks the release before anything is built. Either
-# failing marks the workflow run red, which triggers GitHub's default
-# workflow-failure notification to whoever pushed the tag.
+# If `plan` decides there's nothing new to release (main push, version
+# unchanged), every downstream job is skipped and the run finishes green —
+# no noisy failure notification for routine pushes. A real test failure or
+# tag/version mismatch still fails the run loudly, notifying whoever pushed.
 on:
   push:
+    branches: [main]
     tags:
       - "v*.*.*"
 
@@ -24,7 +29,51 @@ permissions:
   contents: write
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      should_release: ${{ steps.resolve.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve target tag and whether a release is needed
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code_version="$(grep -oP '(?<=__version__ = ")[^"]+' stream_viewer/_version.py)"
+          tag="v${code_version}"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # Manual tag push: the tag must match the code, and must be new.
+            if [ "${GITHUB_REF_NAME}" != "${tag}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match stream_viewer/_version.py (${code_version}). Bump _version.py to match before tagging."
+              exit 1
+            fi
+            if gh release view "${tag}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "::error::A release for ${tag} already exists. Bump stream_viewer/_version.py to a new version and tag again."
+              exit 1
+            fi
+            should_release=true
+            echo "Tag ${tag} is new — proceeding with release."
+          else
+            # Automatic path (push to main): only release if this version is new.
+            if gh release view "${tag}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              should_release=false
+              echo "Release ${tag} already exists — nothing new to release for this push."
+            else
+              should_release=true
+              echo "Version ${tag} has no release yet — running the release pipeline."
+            fi
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "should_release=${should_release}" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: plan
+    if: needs.plan.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -37,33 +86,8 @@ jobs:
 
       - run: uv run pytest -q --tb=short
 
-  check-version:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify tag matches stream_viewer/_version.py
-        run: |
-          tag_version="${GITHUB_REF_NAME#v}"
-          code_version="$(grep -oP '(?<=__version__ = ")[^"]+' stream_viewer/_version.py)"
-          if [ "$tag_version" != "$code_version" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match stream_viewer/_version.py (${code_version}). Bump _version.py to match before tagging."
-            exit 1
-          fi
-          echo "Tag matches code version: ${code_version}"
-
-      - name: Verify this version hasn't been released before
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "::error::A release for ${GITHUB_REF_NAME} already exists. Bump stream_viewer/_version.py to a new version and tag again."
-            exit 1
-          fi
-          echo "No existing release for ${GITHUB_REF_NAME} — clear to proceed."
-
   build-catalog:
-    needs: [test, check-version]
+    needs: [plan, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -72,8 +96,8 @@ jobs:
 
       - run: uv sync
 
-      - name: Build viewer.db (no probe, keeps CI fast)
-        run: uv run stream-viewer-build
+      - name: Build viewer.db (full catalog, incl. HLS probe — same as `make build-probed`)
+        run: uv run stream-viewer-build --probe --probe-all --probe-workers 500 --probe-deep
 
       - uses: actions/upload-artifact@v7
         with:
@@ -82,7 +106,7 @@ jobs:
           retention-days: 1
 
   build-windows:
-    needs: build-catalog
+    needs: [plan, build-catalog]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -107,16 +131,16 @@ jobs:
 
       - name: Zip
         shell: pwsh
-        run: Compress-Archive -Path dist/StreamingViewerTV -DestinationPath "StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip"
+        run: Compress-Archive -Path dist/StreamingViewerTV -DestinationPath "StreamingViewerTV-${{ needs.plan.outputs.tag }}-windows-x64.zip"
 
       - uses: actions/upload-artifact@v7
         with:
           name: windows-bundle
-          path: StreamingViewerTV-${{ github.ref_name }}-windows-x64.zip
+          path: StreamingViewerTV-${{ needs.plan.outputs.tag }}-windows-x64.zip
           retention-days: 1
 
   build-linux:
-    needs: build-catalog
+    needs: [plan, build-catalog]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -140,16 +164,16 @@ jobs:
           chmod +x dist/StreamingViewerTV/StreamingViewerTV
 
       - name: Tar (preserves the executable bit; zip on Linux doesn't reliably)
-        run: tar czf "StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz" -C dist StreamingViewerTV
+        run: tar czf "StreamingViewerTV-${{ needs.plan.outputs.tag }}-linux-x86_64.tar.gz" -C dist StreamingViewerTV
 
       - uses: actions/upload-artifact@v7
         with:
           name: linux-bundle
-          path: StreamingViewerTV-${{ github.ref_name }}-linux-x86_64.tar.gz
+          path: StreamingViewerTV-${{ needs.plan.outputs.tag }}-linux-x86_64.tar.gz
           retention-days: 1
 
   publish-release:
-    needs: [build-windows, build-linux]
+    needs: [plan, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -165,10 +189,11 @@ jobs:
       - name: Create GitHub release with both bundles attached
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            "StreamingViewerTV-${GITHUB_REF_NAME}-windows-x64.zip" \
-            "StreamingViewerTV-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" \
-            --title "${GITHUB_REF_NAME}" \
+          gh release create "${TAG}" \
+            "StreamingViewerTV-${TAG}-windows-x64.zip" \
+            "StreamingViewerTV-${TAG}-linux-x86_64.tar.gz" \
+            --title "${TAG}" \
             --generate-notes \
             --repo "${{ github.repository }}"

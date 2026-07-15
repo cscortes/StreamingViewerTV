@@ -17,6 +17,8 @@
 | FEAT-001 | 2026-07-13 | Show “what’s on now” (EPG title) in the sidebar and player when available. | Done | 2026-07-13 |
 | BUG-013 | 2026-07-14 | `stream-viewer-build` crashes with `NameError` right after writing `viewer.db`, so the build reports failure despite succeeding. | Fixed | 2026-07-14 |
 | FEAT-002 | 2026-07-14 | Windows/Linux desktop packaging (PyInstaller) with automated GitHub Releases; visible semantic version in the status bar. | Done | 2026-07-14 |
+| BUG-014 | 2026-07-14 | Release builds shipped `viewer.db` without HLS probe data, so every stream showed `stream_quality=unknown` in packaged releases. | Fixed | 2026-07-14 |
+| FEAT-003 | 2026-07-14 | Fully automatic releases: bumping `_version.py` and pushing to `main` now runs the release pipeline and creates the `vX.Y.Z` tag/release itself; manual tag push still works for hotfixes. | Done | 2026-07-14 |
 
 ## Details
 
@@ -329,3 +331,42 @@ Canonical tests: `tests/test_prepare_db.py::test_prepare_db_main_completes_witho
 3. If packaging changes, rebuild locally (`uv run pyinstaller packaging/streaming_viewer_tv.spec`) and smoke-test the resulting binary with a real `viewer.db` dropped next to it before trusting CI.
 
 Canonical tests: `tests/test_frozen_paths.py`, `tests/test_known_issues.py::test_index_html_shows_current_version_in_status_bar`.
+
+### BUG-014 — Release builds skipped the HLS probe
+
+- **Reported:** 2026-07-14
+- **Status:** Fixed
+- **Fixed:** 2026-07-14
+- **Symptom:** The `v0.1.0` release's bundled `viewer.db` had every stream's `stream_quality` set to `unknown` — the probe grades (`excellent`/`okay`/`poor`) that `make build-probed` produces locally were absent.
+- **Cause:** `.github/workflows/release.yml`'s `build-catalog` job ran plain `uv run stream-viewer-build` (equivalent to `make build`), explicitly commented "no probe, keeps CI fast" — it never ran the probe step at all.
+- **Fix:** `build-catalog` now runs `uv run stream-viewer-build --probe --probe-all --probe-workers 500 --probe-deep` — the same flags as `make build-probed` — so every release ships fully-graded stream data.
+
+#### AI instructions (regression workflow)
+
+1. If you touch `build-catalog` in `.github/workflows/release.yml` again, confirm the build command still includes `--probe --probe-all` (or an equivalent full-probe invocation) — grep the workflow file for `--probe-all` and fail the review if it's missing.
+2. After any release, spot-check the published `viewer.db` (or the packaged app's status bar / stream list) to confirm `stream_quality` values are graded, not all `unknown`.
+
+Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no dedicated pytest — this is a CI-workflow content check, not app behavior).
+
+### FEAT-003 — Fully automatic releases on version bump
+
+- **Reported:** 2026-07-14
+- **Status:** Done
+- **Fixed:** 2026-07-14
+- **Notes:**
+  - `.github/workflows/release.yml` now also triggers on push to `main` (in addition to `vX.Y.Z` tag pushes).
+  - New `plan` job reads `stream_viewer/_version.py`, computes the target tag, and checks (via `gh release view`) whether that version already has a release.
+    - Push to `main`, version unchanged → every downstream job is skipped; the run finishes green with no failure noise.
+    - Push to `main` with a new version, or a manual matching tag push → the full pipeline runs (`test` → `build-catalog` → `build-windows`/`build-linux` → `publish-release`).
+    - Manual tag push that doesn't match `_version.py`, or that duplicates an existing release → fails loudly (as before), notifying whoever pushed it.
+  - `publish-release`'s `gh release create <tag> ...` creates the git tag itself if it doesn't already exist — no separate `git tag`/`git push` step is needed for the automatic path.
+  - Why not just have CI push the tag directly? GitHub Actions doesn't let the default `GITHUB_TOKEN` trigger further workflow runs (anti-loop protection), so a tag pushed that way would never actually trigger `release.yml`. Driving everything from one `plan`-gated workflow run avoids that pitfall entirely.
+  - Manual tagging (`git tag vX.Y.Z && git push origin vX.Y.Z`) still works, e.g. for a hotfix off a non-`main` ref.
+
+#### AI instructions (regression workflow)
+
+1. If you touch `release.yml`'s trigger or `plan` job, verify:
+   - A push to `main` with an unchanged `_version.py` results in `plan` succeeding with `should_release=false` and every other job **skipped** (not failed).
+   - A push to `main` with a bumped `_version.py` (no existing release for that version) results in `should_release=true` and the full pipeline running.
+   - A tag push where the tag doesn't match `_version.py` still fails `plan` immediately with a clear `::error::`.
+2. There's no unit test for this (it's a GitHub Actions workflow, not app code) — verify by inspecting a real run via `gh run list` / `gh run view` after pushing, per the [Versioning](DevReadme.md#versioning) section.
