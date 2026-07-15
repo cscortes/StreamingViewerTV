@@ -12,9 +12,7 @@ in your browser.
 
 ## Download & run
 
-No Python, no terminal, no setup — just download, unzip, and go.
-
-Grab the latest build from the **[Releases page](../../releases/latest)**.
+Grab the latest executable from the **[Releases page](../../releases/latest)**.
 
 ### Windows
 
