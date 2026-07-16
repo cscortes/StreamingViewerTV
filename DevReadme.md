@@ -46,6 +46,9 @@ iptv_export/             # generated data (gitignored)
   viewer.db              # required by the viewer
   streams*.csv           # intermediate CSVs
   epg/                   # XMLTV inputs for prepare
+
+packaging/               # PyInstaller desktop bundles
+  streaming_viewer_tv.spec
 ```
 
 ## Builder
@@ -203,6 +206,40 @@ EPG / Now-playing UI contracts: `tests/test_epg.py`, `tests/test_now_playing_ui.
 Known issues and their regression tests live in [buglist.md](buglist.md) — check there
 before filing a duplicate, and add an entry (with a test) for anything new you fix.
 
+## Packaging (desktop bundles)
+
+Releases ship a PyInstaller **onedir** bundle per platform (Windows zip, Linux/macOS
+tarball). The shared spec is `packaging/streaming_viewer_tv.spec`. PyInstaller must
+run **on the target OS** — there is no cross-compilation.
+
+### Build a bundle locally
+
+```bash
+uv sync --group packaging
+uv run stream-viewer-build --skip-download   # or a full probed build
+uv run pyinstaller --noconfirm packaging/streaming_viewer_tv.spec
+
+# Drop the catalog next to the executable (same layout as CI)
+mkdir -p dist/StreamingViewerTV/iptv_export
+cp iptv_export/viewer.db dist/StreamingViewerTV/iptv_export/viewer.db
+chmod +x dist/StreamingViewerTV/StreamingViewerTV   # Linux / macOS
+```
+
+Then run `dist/StreamingViewerTV/StreamingViewerTV` (or `.exe` on Windows). A browser
+tab should open at [http://127.0.0.1:8787](http://127.0.0.1:8787).
+
+### Release artifacts
+
+| Platform | CI runner | Archive name |
+|----------|-----------|--------------|
+| Windows x64 | `windows-latest` | `StreamingViewerTV-<tag>-windows-x64.zip` |
+| Linux x86_64 | `ubuntu-latest` | `StreamingViewerTV-<tag>-linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `macos-latest` | `StreamingViewerTV-<tag>-macos-arm64.tar.gz` |
+
+The prebuilt macOS release is **arm64 only**. On an Intel Mac, build the bundle
+locally with the steps above (same spec). Bundles are unsigned — expect SmartScreen
+(Windows) or Gatekeeper (macOS) warnings; see [README.md](README.md) troubleshooting.
+
 ## Versioning
 
 The running version is shown in the viewer's status bar. `stream_viewer/_version.py` is the
@@ -233,10 +270,13 @@ step needed. The [release workflow](.github/workflows/release.yml) runs this pip
 3. **`build-catalog`** builds a fresh `viewer.db`, including a full HLS probe of every
    stream (same as `make build-probed`) so releases ship with `stream_quality` grades,
    not just unprobed metadata.
-4. **`build-windows`** and **`build-linux`** package that catalog into the two desktop bundles, in parallel.
-5. **`publish-release`** only runs once *both* bundles succeed — it creates the GitHub Release
-   (and the underlying `vX.Y.Z` tag, which doesn't need to exist beforehand) with both
-   archives attached. If either platform build fails, no release is created.
+4. **`build-windows`**, **`build-linux`**, and **`build-macos`** package that catalog into
+   the three desktop bundles in parallel (see [Packaging](#packaging-desktop-bundles)
+   for artifact names and local builds).
+5. **`publish-release`** only runs once *all* platform bundles succeed — it creates the
+   GitHub Release (and the underlying `vX.Y.Z` tag, which doesn't need to exist
+   beforehand) with all three archives attached. If any platform build fails, no
+   release is created.
 
 Prefer to tag manually instead (e.g. for a hotfix off a non-`main` ref)? That still works:
 

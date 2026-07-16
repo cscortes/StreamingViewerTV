@@ -10,6 +10,8 @@ in your browser.
 - **Theater and fullscreen modes** for distraction-free viewing
 - **Works offline** — the app ships with its own channel catalog, no account or login needed
 
+![StreamingViewerTV — search, filters, channel list, and player](screenshot.png)
+
 ## Download & run
 
 Grab the latest executable from the **[Releases page](../../releases/latest)**.
@@ -26,6 +28,17 @@ Grab the latest executable from the **[Releases page](../../releases/latest)**.
 2. Extract it: `tar xzf StreamingViewerTV-*.tar.gz`
 3. Run it: `./StreamingViewerTV/StreamingViewerTV`
 4. A browser tab opens automatically — you're ready to watch.
+
+### macOS (Apple Silicon)
+
+1. Download `StreamingViewerTV-<version>-macos-arm64.tar.gz`.
+2. Extract it: `tar xzf StreamingViewerTV-*.tar.gz`
+3. Run it: `./StreamingViewerTV/StreamingViewerTV`
+4. A browser tab opens automatically — you're ready to watch.
+
+This build is for Apple Silicon Macs (M1/M2/M3/…). There is no prebuilt Intel Mac
+archive — on an Intel Mac, build the desktop bundle from source (see
+[Packaging in DevReadme.md](DevReadme.md#packaging-desktop-bundles)).
 
 The catalog bundled with each release is a snapshot as of that release's build date.
 Grab a newer release from the [Releases page](../../releases) for fresher channel data.
@@ -45,11 +58,22 @@ Grab a newer release from the [Releases page](../../releases) for fresher channe
 The app isn't code-signed (that costs money none of this project charges for), so Windows
 flags it as coming from an unrecognized publisher. Click **More info**, then **Run anyway**.
 
-**Linux says "Permission denied" when running the app**
+**Linux / macOS says "Permission denied" when running the app**
 The extracted file lost its executable bit. Run:
 
 ```bash
 chmod +x StreamingViewerTV/StreamingViewerTV
+./StreamingViewerTV/StreamingViewerTV
+```
+
+**macOS says the app "cannot be opened because the developer cannot be verified"**
+The app isn't code-signed or notarized (same reason as the Windows SmartScreen
+warning). In Finder, open the `StreamingViewerTV` folder, then right-click (or
+Control-click) the `StreamingViewerTV` executable, choose **Open**, and confirm.
+Or clear the quarantine flag from a terminal:
+
+```bash
+xattr -dr com.apple.quarantine StreamingViewerTV
 ./StreamingViewerTV/StreamingViewerTV
 ```
 
@@ -76,7 +100,7 @@ Found a bug, or a channel category that seems off? Please
 
 - What you were doing when it happened
 - What you expected vs. what actually happened
-- Your OS (Windows/Linux) and the app version (shown in the status bar at the bottom of the app)
+- Your OS (Windows/Linux/macOS) and the app version (shown in the status bar at the bottom of the app)
 
 ## For developers
 

@@ -14,6 +14,7 @@ name: Release
 #   plan -> test -----------\
 #        \                   -> build-catalog -> build-windows -\
 #         -----------------/                  -> build-linux   -> publish-release
+#                                             -> build-macos  -/
 #
 # If `plan` decides there's nothing new to release (main push, version
 # unchanged), every downstream job is skipped and the run finishes green —
@@ -172,8 +173,42 @@ jobs:
           path: StreamingViewerTV-${{ needs.plan.outputs.tag }}-linux-x86_64.tar.gz
           retention-days: 1
 
+  build-macos:
+    needs: [plan, build-catalog]
+    # Apple Silicon (arm64). Intel Macs are not covered by this job.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - run: uv sync --group packaging
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: viewer-db
+          path: iptv_export
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller --noconfirm packaging/streaming_viewer_tv.spec
+
+      - name: Assemble bundle folder
+        run: |
+          mkdir -p dist/StreamingViewerTV/iptv_export
+          cp iptv_export/viewer.db dist/StreamingViewerTV/iptv_export/viewer.db
+          chmod +x dist/StreamingViewerTV/StreamingViewerTV
+
+      - name: Tar (preserves the executable bit)
+        run: tar czf "StreamingViewerTV-${{ needs.plan.outputs.tag }}-macos-arm64.tar.gz" -C dist StreamingViewerTV
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-bundle
+          path: StreamingViewerTV-${{ needs.plan.outputs.tag }}-macos-arm64.tar.gz
+          retention-days: 1
+
   publish-release:
-    needs: [plan, build-windows, build-linux]
+    needs: [plan, build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -186,7 +221,11 @@ jobs:
         with:
           name: linux-bundle
 
-      - name: Create GitHub release with both bundles attached
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-bundle
+
+      - name: Create GitHub release with all platform bundles attached
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
@@ -194,6 +233,7 @@ jobs:
           gh release create "${TAG}" \
             "StreamingViewerTV-${TAG}-windows-x64.zip" \
             "StreamingViewerTV-${TAG}-linux-x86_64.tar.gz" \
+            "StreamingViewerTV-${TAG}-macos-arm64.tar.gz" \
             --title "${TAG}" \
             --generate-notes \
             --repo "${{ github.repository }}"

@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build spec for StreamingViewerTV — shared by Windows and Linux builds.
+"""PyInstaller build spec for StreamingViewerTV — shared by Windows, Linux, and macOS builds.
 
 Build with:
     uv run pyinstaller packaging/streaming_viewer_tv.spec
@@ -9,8 +9,9 @@ folder plus the executable). The release workflow drops a pre-built
 iptv_export/viewer.db next to the executable afterward; this spec does not
 bundle any catalog data itself.
 
-Windows names the executable StreamingViewerTV.exe; Linux names it
+Windows names the executable StreamingViewerTV.exe; Linux and macOS name it
 StreamingViewerTV (no extension) — PyInstaller handles that automatically.
+Must be built on the target OS (no cross-compilation).
 """
 
 from pathlib import Path
