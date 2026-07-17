@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import secrets
@@ -16,7 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx2
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -63,6 +64,13 @@ USER_AGENT = "StreamingViewerTV/1.0"
 PROXY_SESSION_TTL_SEC = 6 * 60 * 60
 PROXY_MAX_RETRIES = 3
 PROXY_RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+# Slow CDNs (e.g. Angel TV ~2MB / ~10s segments) need a long read timeout; connect stays tight.
+PROXY_TIMEOUT = httpx2.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0)
+# Warm media-playlist segments in the background so the player does not stall
+# between ~6–10s chunks while the proxy is still downloading the next one.
+SEGMENT_PREFETCH_MAX = 8
+SEGMENT_CACHE_TTL_SEC = 90
+SEGMENT_CACHE_MAX_ENTRIES = 48
 VIEWER_DB_ID = "viewer.db"
 
 
@@ -261,12 +269,18 @@ def now_playing_for_stream(stream: dict[str, Any]) -> dict[str, Any] | None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global _http_client
     require_viewer_db()
     try:
         ensure_catalog()
     except HTTPException as exc:
         raise RuntimeError(exc.detail) from exc
-    yield
+    _http_client = httpx2.AsyncClient(follow_redirects=True, timeout=PROXY_TIMEOUT)
+    try:
+        yield
+    finally:
+        await _http_client.aclose()
+        _http_client = None
 
 
 app = FastAPI(title="StreamingViewerTV", version=__version__, lifespan=lifespan)
@@ -282,6 +296,10 @@ _catalog: dict[str, Any] = {
 
 _proxy_lock = threading.Lock()
 _proxy_sessions: dict[str, dict[str, Any]] = {}
+_http_client: httpx2.AsyncClient | None = None
+_segment_cache_lock = threading.Lock()
+_segment_cache: dict[str, dict[str, Any]] = {}
+_segment_inflight: dict[str, asyncio.Future[tuple[bytes, str]]] = {}
 
 
 def available_sources() -> list[dict[str, Any]]:
@@ -522,28 +540,156 @@ def resolve_hls_uri(base_url: str, reference: str) -> str:
     return urljoin(base_url, reference)
 
 
+def is_http_url(url: str) -> bool:
+    """True for fetchable http(s) URLs (rejects DRM schemes and corrupt refs)."""
+    if not url or any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def proxied_or_original(session_id: str, base_url: str, reference: str) -> str:
+    """Proxy http(s) playlist refs; leave DRM/data/other schemes unchanged.
+
+    Raising on non-http URIs used to 400 the entire playlist (BUG-017) whenever a
+    stream advertised an `skd://` FairPlay key or similar beside playable segments.
+    """
+    absolute = resolve_hls_uri(base_url, reference)
+    if not is_http_url(absolute):
+        return reference
+    return proxy_path(session_id, absolute)
+
+
+def media_segment_urls(body: str, base_url: str) -> list[str]:
+    """Absolute media segment URLs from a media playlist (skips nested .m3u8 variants)."""
+    urls: list[str] = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        absolute = resolve_hls_uri(base_url, line)
+        if not is_http_url(absolute):
+            continue
+        path = urlparse(absolute).path.lower()
+        if path.endswith(".m3u8") or path.endswith(".m3u"):
+            continue
+        urls.append(absolute)
+    return urls
+
+
 def rewrite_m3u8(body: str, base_url: str, session_id: str) -> str:
     lines: list[str] = []
     for raw in body.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
-            if line.startswith("#EXT-X-KEY:") and "URI=" in line:
+            if (
+                line.startswith("#EXT-X-KEY:")
+                or line.startswith("#EXT-X-MEDIA:")
+                or line.startswith("#EXT-X-MAP:")
+            ) and "URI=" in line:
                 def replace_uri(match: re.Match[str]) -> str:
-                    absolute = resolve_hls_uri(base_url, match.group(1))
-                    return f'URI="{proxy_path(session_id, absolute)}"'
+                    return f'URI="{proxied_or_original(session_id, base_url, match.group(1))}"'
 
-                line = re.sub(r'URI="([^"]+)"', replace_uri, line)
-            elif "URI=" in line and line.startswith("#EXT-X-MEDIA:"):
-                def replace_media_uri(match: re.Match[str]) -> str:
-                    absolute = resolve_hls_uri(base_url, match.group(1))
-                    return f'URI="{proxy_path(session_id, absolute)}"'
-
-                line = re.sub(r'URI="([^"]+)"', replace_media_uri, line)
-            lines.append(raw if raw.startswith("#") else line)
+                lines.append(re.sub(r'URI="([^"]+)"', replace_uri, line))
+            else:
+                # Preserve original formatting for non-rewritten tag lines.
+                lines.append(raw if raw.startswith("#") else line)
             continue
         absolute = resolve_hls_uri(base_url, line)
+        if not is_http_url(absolute):
+            lines.append(line)
+            continue
         lines.append(proxy_path(session_id, absolute))
     return "\n".join(lines) + "\n"
+
+
+def sort_master_variants_by_bandwidth(body: str) -> str:
+    """Put lowest-BANDWIDTH #EXT-X-STREAM-INF variants first.
+
+    Many masters (incl. Angel TV) list 720p first; hls.js then starts there and
+    underruns on slow CDNs. Lowest-first makes startLevel 0 the safest rung.
+    """
+    if "#EXT-X-STREAM-INF:" not in body:
+        return body
+    lines = body.splitlines()
+    header: list[str] = []
+    variants: list[tuple[int, list[str]]] = []
+    trailer: list[str] = []
+    i = 0
+    seen_variant = False
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            seen_variant = True
+            bandwidth = 0
+            match = re.search(r"BANDWIDTH=(\d+)", line)
+            if match:
+                bandwidth = int(match.group(1))
+            block = [line]
+            i += 1
+            if i < len(lines):
+                block.append(lines[i])
+                i += 1
+            variants.append((bandwidth, block))
+            continue
+        if seen_variant:
+            trailer.append(line)
+        else:
+            header.append(line)
+        i += 1
+    if not variants:
+        return body
+    variants.sort(key=lambda item: item[0])
+    ordered = header + [line for _, block in variants for line in block] + trailer
+    ending = "\n" if body.endswith("\n") else ""
+    return "\n".join(ordered) + ending
+
+
+def _prune_segment_cache(now: float | None = None) -> None:
+    current = now if now is not None else time.time()
+    expired = [
+        key
+        for key, entry in _segment_cache.items()
+        if current >= float(entry.get("expires", 0))
+    ]
+    for key in expired:
+        _segment_cache.pop(key, None)
+    while len(_segment_cache) > SEGMENT_CACHE_MAX_ENTRIES:
+        oldest_key = min(
+            _segment_cache,
+            key=lambda item: float(_segment_cache[item].get("expires", 0)),
+        )
+        _segment_cache.pop(oldest_key, None)
+
+
+def _segment_cache_get(target: str) -> tuple[bytes, str] | None:
+    with _segment_cache_lock:
+        _prune_segment_cache()
+        entry = _segment_cache.get(target)
+        if not entry:
+            return None
+        return entry["body"], entry["content_type"]
+
+
+def _segment_cache_put(target: str, body: bytes, content_type: str) -> None:
+    with _segment_cache_lock:
+        _prune_segment_cache()
+        _segment_cache[target] = {
+            "body": body,
+            "content_type": content_type or "application/octet-stream",
+            "expires": time.time() + SEGMENT_CACHE_TTL_SEC,
+        }
+        _prune_segment_cache()
+
+
+def clear_segment_cache() -> None:
+    """Test helper: drop cached segments and in-flight prefetch waiters."""
+    with _segment_cache_lock:
+        _segment_cache.clear()
+    for fut in list(_segment_inflight.values()):
+        if not fut.done():
+            fut.cancel()
+    _segment_inflight.clear()
 
 
 def _prune_proxy_sessions(now: float | None = None) -> None:
@@ -601,8 +747,7 @@ def get_proxy_target(session_id: str, url_id: str) -> tuple[str, str, str]:
 
 
 def validate_remote_url(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if not is_http_url(url):
         raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
     return url
 
@@ -614,22 +759,47 @@ async def fetch_upstream(
     retries: int = PROXY_MAX_RETRIES,
 ) -> httpx2.Response:
     """Fetch a remote URL, retrying transient network/CDN failures."""
-    last_error: Exception | None = None
-    async with httpx2.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        for attempt in range(1, max(1, retries) + 1):
-            try:
-                response = await client.get(target, headers=headers)
-            except httpx2.HTTPError as exc:
-                last_error = exc
-                if attempt >= retries:
-                    break
-                await _async_sleep(0.2 * attempt)
-                continue
+    if not is_http_url(target):
+        raise HTTPException(
+            status_code=400,
+            detail="Only http/https URLs are allowed",
+        )
+    client = _http_client
+    if client is None:
+        async with httpx2.AsyncClient(follow_redirects=True, timeout=PROXY_TIMEOUT) as owned:
+            return await _fetch_upstream_with_client(
+                owned, target, headers, retries=retries
+            )
+    return await _fetch_upstream_with_client(client, target, headers, retries=retries)
 
-            if response.status_code in PROXY_RETRY_STATUSES and attempt < retries:
-                await _async_sleep(0.2 * attempt)
-                continue
-            return response
+
+async def _fetch_upstream_with_client(
+    client: httpx2.AsyncClient,
+    target: str,
+    headers: dict[str, str],
+    *,
+    retries: int,
+) -> httpx2.Response:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            response = await client.get(target, headers=headers)
+        except httpx2.InvalidURL as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid upstream URL: {exc}",
+            ) from exc
+        except httpx2.HTTPError as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            await _async_sleep(0.2 * attempt)
+            continue
+
+        if response.status_code in PROXY_RETRY_STATUSES and attempt < retries:
+            await _async_sleep(0.2 * attempt)
+            continue
+        return response
 
     if last_error is not None:
         raise HTTPException(
@@ -639,11 +809,156 @@ async def fetch_upstream(
     raise HTTPException(status_code=502, detail="Upstream fetch failed after retries")
 
 
+async def open_upstream_stream(
+    target: str,
+    headers: dict[str, str],
+    *,
+    retries: int = PROXY_MAX_RETRIES,
+) -> httpx2.Response:
+    """Open a streaming upstream GET (caller must aclose the response)."""
+    if not is_http_url(target):
+        raise HTTPException(
+            status_code=400,
+            detail="Only http/https URLs are allowed",
+        )
+    client = _http_client
+    if client is None:
+        # Streaming needs a long-lived client; fall back to a full buffered fetch
+        # wrapped as a closed-once response by using the normal path instead.
+        raise HTTPException(
+            status_code=503,
+            detail="Proxy HTTP client not ready",
+        )
+
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            request = client.build_request("GET", target, headers=headers)
+            response = await client.send(request, stream=True)
+        except httpx2.InvalidURL as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid upstream URL: {exc}",
+            ) from exc
+        except httpx2.HTTPError as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            await _async_sleep(0.2 * attempt)
+            continue
+
+        if response.status_code in PROXY_RETRY_STATUSES and attempt < retries:
+            await response.aclose()
+            await _async_sleep(0.2 * attempt)
+            continue
+        return response
+
+    if last_error is not None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Upstream fetch failed: {last_error}",
+        ) from last_error
+    raise HTTPException(status_code=502, detail="Upstream fetch failed after retries")
+
+
+def is_likely_playlist(content_type: str, final_url: str) -> bool:
+    path = urlparse(final_url).path.lower()
+    ct = (content_type or "").lower()
+    return "mpegurl" in ct or path.endswith(".m3u8") or path.endswith(".m3u")
+
+
+def is_likely_media_segment(content_type: str, final_url: str) -> bool:
+    """True when the response is almost certainly a media segment (safe to stream)."""
+    path = urlparse(final_url).path.lower()
+    ct = (content_type or "").lower()
+    if is_likely_playlist(content_type, final_url):
+        return False
+    if any(path.endswith(ext) for ext in (".ts", ".m4s", ".mp4", ".aac", ".m4a", ".vtt", ".mp3")):
+        return True
+    return (
+        "mp2t" in ct
+        or ct.startswith("video/")
+        or ct.startswith("audio/")
+        or "octet-stream" in ct
+    )
+
+
+async def _iter_upstream_bytes(response: httpx2.Response):
+    try:
+        async for chunk in response.aiter_bytes():
+            yield chunk
+    finally:
+        await response.aclose()
+
+
+async def _iter_upstream_bytes_and_cache(
+    response: httpx2.Response,
+    target: str,
+    content_type: str,
+):
+    """Stream to the player while retaining a copy for the segment cache."""
+    chunks: list[bytes] = []
+    try:
+        async for chunk in response.aiter_bytes():
+            chunks.append(chunk)
+            yield chunk
+        if chunks:
+            _segment_cache_put(target, b"".join(chunks), content_type)
+    finally:
+        await response.aclose()
+
+
+async def _load_segment(target: str, headers: dict[str, str]) -> tuple[bytes, str]:
+    """Return segment bytes, coalescing concurrent fetches and caching the result."""
+    cached = _segment_cache_get(target)
+    if cached is not None:
+        return cached
+
+    existing = _segment_inflight.get(target)
+    if existing is not None and not existing.done():
+        return await existing
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[tuple[bytes, str]] = loop.create_future()
+    _segment_inflight[target] = fut
+    try:
+        upstream = await fetch_upstream(target, headers)
+        if upstream.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Upstream returned HTTP {upstream.status_code} for {target}",
+            )
+        content_type = upstream.headers.get("content-type", "application/octet-stream")
+        body = upstream.content
+        _segment_cache_put(target, body, content_type)
+        result = (body, content_type)
+        fut.set_result(result)
+        return result
+    except Exception as exc:
+        if not fut.done():
+            fut.set_exception(exc)
+            # Retrieve so asyncio does not log "Future exception was never retrieved"
+            # when we are the only waiter and re-raise below (BUG-018).
+            fut.exception()
+        raise
+    finally:
+        if _segment_inflight.get(target) is fut:
+            _segment_inflight.pop(target, None)
+
+
+async def _prefetch_segment(target: str, headers: dict[str, str]) -> None:
+    if not is_http_url(target):
+        return
+    if _segment_cache_get(target) is not None:
+        return
+    try:
+        await _load_segment(target, headers)
+    except Exception:  # noqa: BLE001 — best-effort warm; player will retry on miss
+        return
+
+
 async def _async_sleep(seconds: float) -> None:
-    import asyncio
-
     await asyncio.sleep(seconds)
-
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
@@ -767,7 +1082,10 @@ async def api_epg_status() -> dict[str, Any]:
 
 
 @app.get("/api/proxy/s/{session_id}/{url_id}")
-async def api_proxy_session(session_id: str, url_id: str) -> Response:
+async def api_proxy_session(
+    session_id: str,
+    url_id: str,
+) -> Response:
     target, referrer, user_agent = get_proxy_target(session_id, url_id)
     headers = {
         "User-Agent": user_agent or USER_AGENT,
@@ -776,10 +1094,26 @@ async def api_proxy_session(session_id: str, url_id: str) -> Response:
     if referrer:
         headers["Referer"] = referrer
 
-    upstream = await fetch_upstream(target, headers)
+    cached = _segment_cache_get(target)
+    if cached is not None:
+        body, content_type = cached
+        return Response(
+            content=body,
+            media_type=content_type,
+            headers={"Cache-Control": "no-store"},
+        )
 
-    # Upstream 414 means the *remote* URL is too long for that host — not our local path.
+    # Do NOT await in-flight prefetch here: that forced store-and-forward and
+    # undid streaming for the player (still stalled on Angel TV). Cache hits
+    # above remain the fast path once prefetch finishes.
+
+    # Stream media segments so the player can buffer before the full ~2MB chunk
+    # arrives (BUG-019 / Angel TV-style long segments on slow CDNs). Playlists
+    # still need the full body for URI rewriting.
+    upstream = await open_upstream_stream(target, headers)
+
     if upstream.status_code == 414:
+        await upstream.aclose()
         raise HTTPException(
             status_code=502,
             detail=(
@@ -788,34 +1122,38 @@ async def api_proxy_session(session_id: str, url_id: str) -> Response:
             ),
         )
     if upstream.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Upstream returned HTTP {upstream.status_code} for {target}",
-        )
+        detail = f"Upstream returned HTTP {upstream.status_code} for {target}"
+        await upstream.aclose()
+        raise HTTPException(status_code=502, detail=detail)
 
-    # Critical: resolve playlist URIs against the *final* URL after redirects.
-    # Joining against a short redirector (e.g. jmp2.uk) invents huge invalid child URLs
-    # that the redirector rejects with 414.
     final_url = str(upstream.url)
     content_type = upstream.headers.get("content-type", "application/octet-stream")
-    body = upstream.content
-    path = urlparse(final_url).path.lower()
-    is_playlist = (
-        "mpegurl" in content_type.lower()
-        or path.endswith(".m3u8")
-        or path.endswith(".m3u")
-        or body[:1] == b"#"
-    )
 
+    if is_likely_media_segment(content_type, final_url):
+        return StreamingResponse(
+            _iter_upstream_bytes_and_cache(upstream, target, content_type),
+            media_type=content_type,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    try:
+        body = await upstream.aread()
+    finally:
+        await upstream.aclose()
+
+    is_playlist = is_likely_playlist(content_type, final_url) or body[:1] == b"#"
     if is_playlist:
         text = body.decode("utf-8", errors="replace")
         rewritten = rewrite_m3u8(text, final_url, session_id)
+        # Do not background-prefetch media segments here: on slow CDNs (Angel TV)
+        # prefetch competes with the player's own streamed GETs and makes stalls worse.
         return Response(
             content=rewritten,
             media_type="application/vnd.apple.mpegurl",
             headers={"Cache-Control": "no-store"},
         )
 
+    _segment_cache_put(target, body, content_type)
     return Response(
         content=body,
         media_type=content_type,

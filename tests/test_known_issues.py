@@ -16,10 +16,12 @@ from stream_viewer import app as viewer
 from stream_viewer.app import (
     available_sources,
     create_proxy_session,
+    media_segment_urls,
     proxy_path,
     resolve_hls_uri,
     resolve_source,
     rewrite_m3u8,
+    sort_master_variants_by_bandwidth,
     video_quality_rank,
 )
 from tests.db_fixtures import build_viewer_db
@@ -36,9 +38,11 @@ LONG_TOKEN = (
 def _reset_proxy_state():
     with viewer._proxy_lock:
         viewer._proxy_sessions.clear()
+    viewer.clear_segment_cache()
     yield
     with viewer._proxy_lock:
         viewer._proxy_sessions.clear()
+    viewer.clear_segment_cache()
 
 
 @pytest.fixture
@@ -331,6 +335,445 @@ class TestUpstreamRetries:
         response = client.get(play)
         assert response.status_code == 502
         assert "404" in response.json()["detail"]
+
+
+class TestSegmentPrefetch:
+    """Segment URL helpers; playlist-time prefetch was disabled (BUG-021)."""
+
+    def test_media_segment_urls_skips_nested_playlists(self):
+        body = (
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1000\n"
+            "variant.m3u8\n"
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        urls = media_segment_urls(body, "https://cdn.example/live/playlist.m3u8")
+        assert urls == ["https://cdn.example/live/seg0.ts"]
+
+
+class TestMediaTagUriRewrite:
+    """BUG-016: #EXT-X-MEDIA / KEY URI= rewrites must not be discarded.
+
+    Regression fingerprint from production logs:
+      GET /api/proxy/s/{session}/en-vtt/index.m3u8 → 404
+    while hashed segment ids returned 200. That happens when a relative
+    subtitle URI survives rewrite and is resolved against the proxy path.
+    """
+
+    def test_subtitle_media_uri_is_proxied(self):
+        session = create_proxy_session(referrer="", user_agent="test")
+        base = "https://cdn.example/live/master.m3u8"
+        body = (
+            "#EXTM3U\n"
+            '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",'
+            'DEFAULT=YES,AUTOSELECT=YES,URI="en-vtt/index.m3u8"\n'
+            "#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n"
+            "video.m3u8\n"
+        )
+        rewritten = rewrite_m3u8(body, base, session)
+        assert "en-vtt/index.m3u8" not in rewritten
+        assert "/api/proxy/s/" in rewritten
+        media_line = next(
+            line for line in rewritten.splitlines() if line.startswith("#EXT-X-MEDIA:")
+        )
+        assert 'URI="/api/proxy/s/' in media_line
+        url_id = media_line.split('URI="')[1].rstrip('"').rsplit("/", 1)[-1]
+        assert len(url_id) == 16
+        assert "/" not in url_id
+        target = viewer._proxy_sessions[session]["urls"][url_id]
+        assert target == "https://cdn.example/live/en-vtt/index.m3u8"
+
+    def test_key_uri_is_proxied(self):
+        session = create_proxy_session(referrer="", user_agent="test")
+        base = "https://cdn.example/live/index.m3u8"
+        body = (
+            "#EXTM3U\n"
+            '#EXT-X-KEY:METHOD=AES-128,URI="keys/key.bin",IV=0x1\n'
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        rewritten = rewrite_m3u8(body, base, session)
+        key_line = next(
+            line for line in rewritten.splitlines() if line.startswith("#EXT-X-KEY:")
+        )
+        assert 'URI="/api/proxy/s/' in key_line
+        assert "keys/key.bin" not in key_line
+        assert 'IV=0x1' in key_line
+
+    def test_rewritten_media_line_is_not_discarded_for_raw_original(self):
+        """Guard the exact bug: rewrite computed into `line` then `raw` appended."""
+        session = create_proxy_session(referrer="", user_agent="test")
+        raw_media = (
+            '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",'
+            'URI="en-vtt/index.m3u8"'
+        )
+        body = f"#EXTM3U\n{raw_media}\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8\n"
+        rewritten = rewrite_m3u8(body, "https://cdn.example/live/master.m3u8", session)
+        assert raw_media not in rewritten
+        assert all(
+            "en-vtt/" not in line
+            for line in rewritten.splitlines()
+            if line.startswith("#EXT-X-MEDIA:")
+        )
+
+    @respx.mock
+    def test_proxy_serves_rewritten_subtitle_playlist(self, client: TestClient):
+        """End-to-end: master → rewritten MEDIA URI → subtitle playlist 200."""
+        master = "https://cdn.example/live/master.m3u8"
+        video = "https://cdn.example/live/video.m3u8"
+        subs = "https://cdn.example/live/en-vtt/index.m3u8"
+        master_body = (
+            "#EXTM3U\n"
+            '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",'
+            'DEFAULT=YES,AUTOSELECT=YES,URI="en-vtt/index.m3u8"\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES="subs"\n'
+            "video.m3u8\n"
+        )
+        subs_body = (
+            "#EXTM3U\n"
+            "#EXT-X-TARGETDURATION:6\n"
+            "#EXTINF:6.0,\n"
+            "0.vtt\n"
+        )
+        respx.get(master).mock(
+            return_value=Response(
+                200,
+                text=master_body,
+                headers={"content-type": "application/vnd.apple.mpegurl"},
+            )
+        )
+        respx.get(video).mock(
+            return_value=Response(
+                200,
+                text="#EXTM3U\n#EXTINF:6.0,\nseg0.ts\n",
+                headers={"content-type": "application/vnd.apple.mpegurl"},
+            )
+        )
+        subs_route = respx.get(subs).mock(
+            return_value=Response(
+                200,
+                text=subs_body,
+                headers={"content-type": "application/vnd.apple.mpegurl"},
+            )
+        )
+
+        session = create_proxy_session(referrer="", user_agent="test")
+        master_proxy = proxy_path(session, master)
+        response = client.get(master_proxy)
+        assert response.status_code == 200, response.text
+        assert "en-vtt/index.m3u8" not in response.text
+
+        media_line = next(
+            line for line in response.text.splitlines() if line.startswith("#EXT-X-MEDIA:")
+        )
+        # Extract URI="/api/proxy/s/.../..."
+        uri_start = media_line.index('URI="') + 5
+        uri_end = media_line.index('"', uri_start)
+        subs_proxy = media_line[uri_start:uri_end]
+        assert subs_proxy.startswith("/api/proxy/s/")
+        assert "en-vtt" not in subs_proxy
+
+        # The broken relative path from the logs must 404 (not a registered url_id).
+        broken = f"/api/proxy/s/{session}/en-vtt/index.m3u8"
+        assert client.get(broken).status_code == 404
+
+        # The rewritten proxy path must fetch the real subtitle playlist.
+        subs_resp = client.get(subs_proxy)
+        assert subs_resp.status_code == 200, subs_resp.text
+        assert subs_resp.text.lstrip().startswith("#EXTM3U")
+        assert subs_route.call_count == 1
+
+    @respx.mock
+    def test_proxy_serves_rewritten_key_uri(self, client: TestClient):
+        media = "https://cdn.example/live/index.m3u8"
+        key = "https://cdn.example/live/keys/key.bin"
+        seg = "https://cdn.example/live/seg0.ts"
+        media_body = (
+            "#EXTM3U\n"
+            '#EXT-X-KEY:METHOD=AES-128,URI="keys/key.bin",IV=0x1\n'
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        respx.get(media).mock(
+            return_value=Response(
+                200,
+                text=media_body,
+                headers={"content-type": "application/vnd.apple.mpegurl"},
+            )
+        )
+        key_route = respx.get(key).mock(
+            return_value=Response(
+                200,
+                content=b"\x00" * 16,
+                headers={"content-type": "application/octet-stream"},
+            )
+        )
+        respx.get(seg).mock(
+            return_value=Response(
+                200,
+                content=b"SEG0",
+                headers={"content-type": "video/mp2t"},
+            )
+        )
+
+        session = create_proxy_session(referrer="", user_agent="test")
+        response = client.get(proxy_path(session, media))
+        assert response.status_code == 200, response.text
+        assert "keys/key.bin" not in response.text
+
+        key_line = next(
+            line for line in response.text.splitlines() if line.startswith("#EXT-X-KEY:")
+        )
+        uri_start = key_line.index('URI="') + 5
+        uri_end = key_line.index('"', uri_start)
+        key_proxy = key_line[uri_start:uri_end]
+        assert key_proxy.startswith("/api/proxy/s/")
+
+        key_resp = client.get(key_proxy)
+        assert key_resp.status_code == 200
+        assert key_resp.content == b"\x00" * 16
+        assert key_route.call_count == 1
+
+
+class TestNonHttpPlaylistUris:
+    """BUG-017: non-http URI schemes must not 400 the whole playlist rewrite."""
+
+    def test_skd_key_left_alone_while_segments_proxied(self):
+        session = create_proxy_session(referrer="", user_agent="test")
+        body = (
+            "#EXTM3U\n"
+            '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://license.example/key",KEYFORMAT='
+            '"com.apple.streamingkeydelivery"\n'
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        rewritten = rewrite_m3u8(body, "https://cdn.example/live/index.m3u8", session)
+        assert 'URI="skd://license.example/key"' in rewritten
+        assert "seg0.ts" not in rewritten
+        assert any(
+            line.startswith("/api/proxy/s/") for line in rewritten.splitlines()
+        )
+
+    def test_http_key_still_proxied(self):
+        session = create_proxy_session(referrer="", user_agent="test")
+        body = (
+            "#EXTM3U\n"
+            '#EXT-X-KEY:METHOD=AES-128,URI="keys/key.bin"\n'
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        rewritten = rewrite_m3u8(body, "https://cdn.example/live/index.m3u8", session)
+        assert "keys/key.bin" not in rewritten
+        assert 'URI="/api/proxy/s/' in rewritten
+
+    def test_ext_x_map_http_uri_is_proxied(self):
+        session = create_proxy_session(referrer="", user_agent="test")
+        body = (
+            "#EXTM3U\n"
+            '#EXT-X-MAP:URI="init.mp4"\n'
+            "#EXTINF:6.0,\n"
+            "seg0.m4s\n"
+        )
+        rewritten = rewrite_m3u8(body, "https://cdn.example/live/index.m3u8", session)
+        map_line = next(
+            line for line in rewritten.splitlines() if line.startswith("#EXT-X-MAP:")
+        )
+        assert 'URI="/api/proxy/s/' in map_line
+        assert "init.mp4" not in map_line
+
+    @respx.mock
+    def test_proxy_returns_200_for_playlist_with_skd_key(self, client: TestClient):
+        media = "https://cdn.example/live/index.m3u8"
+        seg = "https://cdn.example/live/seg0.ts"
+        media_body = (
+            "#EXTM3U\n"
+            '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://license.example/key"\n'
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        respx.get(media).mock(
+            return_value=Response(
+                200,
+                text=media_body,
+                headers={"content-type": "application/vnd.apple.mpegurl"},
+            )
+        )
+        respx.get(seg).mock(
+            return_value=Response(
+                200,
+                content=b"SEG0",
+                headers={"content-type": "video/mp2t"},
+            )
+        )
+        session = create_proxy_session(referrer="", user_agent="test")
+        response = client.get(proxy_path(session, media))
+        assert response.status_code == 200, response.text
+        assert 'URI="skd://license.example/key"' in response.text
+        assert "/api/proxy/s/" in response.text
+
+
+class TestCorruptPlaylistUrls:
+    """BUG-018: non-printable URL chars must not crash prefetch Futures."""
+
+    def test_is_http_url_rejects_control_characters(self):
+        from stream_viewer.app import is_http_url
+
+        assert is_http_url("https://cdn.example/seg0.ts")
+        assert not is_http_url("https://cdn.example/seg\x02bad.ts")
+        assert not is_http_url("skd://license.example/key")
+
+    def test_media_segment_urls_skips_control_characters(self):
+        body = (
+            "#EXTM3U\n"
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+            "#EXTINF:6.0,\n"
+            "seg\x02bad.ts\n"
+        )
+        urls = media_segment_urls(body, "https://cdn.example/live/index.m3u8")
+        assert urls == ["https://cdn.example/live/seg0.ts"]
+
+    def test_rewrite_leaves_control_char_uri_unproxied(self):
+        session = create_proxy_session(referrer="", user_agent="test")
+        body = (
+            "#EXTM3U\n"
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+            "#EXTINF:6.0,\n"
+            "seg\x02bad.ts\n"
+        )
+        rewritten = rewrite_m3u8(body, "https://cdn.example/live/index.m3u8", session)
+        assert "seg\x02bad.ts" in rewritten
+        assert any(line.startswith("/api/proxy/s/") for line in rewritten.splitlines())
+
+    def test_prefetch_skips_control_char_urls(self):
+        import anyio
+
+        from stream_viewer.app import _prefetch_segment, _segment_cache_get
+
+        bad = "https://cdn.example/live/seg\x02bad.ts"
+
+        async def run() -> None:
+            await _prefetch_segment(bad, {"User-Agent": "test", "Accept": "*/*"})
+
+        anyio.run(run)
+        assert _segment_cache_get(bad) is None
+
+    def test_prefetch_fetch_failure_does_not_leak_future_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Failed coalesced fetch must retrieve the Future exception (no asyncio warning)."""
+        import anyio
+
+        from stream_viewer.app import _prefetch_segment
+
+        async def boom(_target: str, _headers: dict[str, str], **_kwargs):
+            raise RuntimeError("upstream boom")
+
+        monkeypatch.setattr(viewer, "fetch_upstream", boom)
+
+        async def run() -> None:
+            await _prefetch_segment(
+                "https://cdn.example/live/seg0.ts",
+                {"User-Agent": "test", "Accept": "*/*"},
+            )
+
+        anyio.run(run)  # must finish without "Future exception was never retrieved"
+
+
+class TestSegmentStreaming:
+    """BUG-019: media segments must stream (not store-and-forward) for slow CDNs."""
+
+    def test_ts_is_likely_media_segment(self):
+        from stream_viewer.app import is_likely_media_segment, is_likely_playlist
+
+        assert is_likely_media_segment(
+            "video/MP2T",
+            "https://cdn.example/ngrp:channel/media_1.ts",
+        )
+        assert not is_likely_playlist(
+            "video/MP2T",
+            "https://cdn.example/ngrp:channel/media_1.ts",
+        )
+        assert is_likely_playlist(
+            "application/x-mpegURL",
+            "https://cdn.example/ngrp:channel/chunklist.m3u8",
+        )
+        assert not is_likely_media_segment(
+            "application/x-mpegURL",
+            "https://cdn.example/ngrp:channel/chunklist.m3u8",
+        )
+
+    def test_master_variants_sorted_lowest_bandwidth_first(self):
+        # Helper retained for optional use; playback no longer forces lowest-first
+        # (that made Angel TV worse — BUG-021).
+        body = (
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            '#EXT-X-STREAM-INF:BANDWIDTH=2187200,RESOLUTION=1280x720\n'
+            "chunklist_b2000000.m3u8\n"
+            '#EXT-X-STREAM-INF:BANDWIDTH=435200,RESOLUTION=426x240\n'
+            "chunklist_b400000.m3u8\n"
+        )
+        sorted_body = sort_master_variants_by_bandwidth(body)
+        uris = [
+            line
+            for line in sorted_body.splitlines()
+            if line and not line.startswith("#")
+        ]
+        assert uris[0] == "chunklist_b400000.m3u8"
+        assert uris[-1] == "chunklist_b2000000.m3u8"
+
+    @respx.mock
+    def test_proxy_does_not_prefetch_media_segments(self, client: TestClient):
+        """BUG-021: prefetch must not race the player on slow CDNs."""
+        media = "https://cdn.example/live/index.m3u8"
+        seg0 = "https://cdn.example/live/seg0.ts"
+        media_body = (
+            "#EXTM3U\n"
+            "#EXT-X-TARGETDURATION:6\n"
+            "#EXTINF:6.0,\n"
+            "seg0.ts\n"
+        )
+        respx.get(media).mock(
+            return_value=Response(
+                200,
+                text=media_body,
+                headers={"content-type": "application/vnd.apple.mpegurl"},
+            )
+        )
+        seg_route = respx.get(seg0).mock(
+            return_value=Response(
+                200,
+                content=b"SEG0",
+                headers={"content-type": "video/mp2t"},
+            )
+        )
+        session = create_proxy_session(referrer="", user_agent="test")
+        response = client.get(proxy_path(session, media))
+        assert response.status_code == 200
+        assert seg_route.call_count == 0
+        assert viewer._segment_cache_get(seg0) is None
+
+    @respx.mock
+    def test_proxy_streams_ts_segment_body(self, client: TestClient):
+        seg = "https://cdn.example/live/ngrp:angel/media_1.ts"
+        payload = b"FAKE_TS_PAYLOAD" * 1000
+        respx.get(seg).mock(
+            return_value=Response(
+                200,
+                content=payload,
+                headers={"content-type": "video/MP2T"},
+            )
+        )
+        session = create_proxy_session(referrer="", user_agent="test")
+        response = client.get(proxy_path(session, seg))
+        assert response.status_code == 200
+        assert response.content == payload
+        assert "mp2t" in response.headers.get("content-type", "").lower()
+        # Streamed body is teed into cache for repeat requests.
+        assert viewer._segment_cache_get(seg) == (payload, "video/MP2T")
 
 
 class TestMinQualityFilters:

@@ -99,3 +99,11 @@ def test_buffering_status_shows_percent():
     assert "Buffering ${who}… ${percent}%" in js or "Buffering" in js and "${percent}%" in js
     assert "bufferPercent" in js
     assert "refreshBufferProgress" in js
+
+
+def test_hls_keeps_ahead_buffer():
+    """BUG-015/019: hls.js keeps a raised buffer target and long frag timeout."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "maxBufferLength: 30" in js
+    assert "liveSyncDurationCount" in js
+    assert "fragLoadingTimeOut: 120000" in js

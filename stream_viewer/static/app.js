@@ -297,7 +297,7 @@
   };
 
   // Live HLS rarely has a finite duration; treat this many seconds ahead as ~100%.
-  const BUFFER_TARGET_SEC = 8;
+  const BUFFER_TARGET_SEC = 30;
 
   function getBufferStats(video) {
     if (!video) return { ahead: 0, percent: null };
@@ -564,6 +564,12 @@
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 12,
+        fragLoadingTimeOut: 120000,
+        manifestLoadingTimeOut: 20000,
       });
       state.hls = hls;
       hls.loadSource(playUrl);

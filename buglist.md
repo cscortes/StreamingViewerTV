@@ -19,6 +19,13 @@
 | FEAT-002 | 2026-07-14 | Windows/Linux desktop packaging (PyInstaller) with automated GitHub Releases; visible semantic version in the status bar. | Done | 2026-07-14 |
 | BUG-014 | 2026-07-14 | Release builds shipped `viewer.db` without HLS probe data, so every stream showed `stream_quality=unknown` in packaged releases. | Fixed | 2026-07-14 |
 | FEAT-003 | 2026-07-14 | Fully automatic releases: bumping `_version.py` and pushing to `main` now runs the release pipeline and creates the `vX.Y.Z` tag/release itself; manual tag push still works for hotfixes. | Done | 2026-07-14 |
+| BUG-015 | 2026-07-16 | Some HLS streams play for ~5–15s then stall while the next segment downloads through the proxy. | Fixed | 2026-07-16 |
+| BUG-016 | 2026-07-16 | Subtitle/KEY playlist URIs (`#EXT-X-MEDIA` / `#EXT-X-KEY`) were rewritten then discarded, so relative paths like `en-vtt/index.m3u8` 404 against the proxy. | Fixed | 2026-07-16 |
+| BUG-017 | 2026-07-16 | Playlists advertising non-http URI schemes (e.g. FairPlay `skd://` keys) 400'd the whole proxy response, blocking otherwise playable segments. | Fixed | 2026-07-16 |
+| BUG-018 | 2026-07-16 | Prefetch of corrupt playlist URLs (non-printable chars) raised `InvalidURL` and logged `Future exception was never retrieved`. | Fixed | 2026-07-16 |
+| BUG-019 | 2026-07-16 | Streams with long/large HLS segments on slow CDNs (e.g. Angel TV America) play ~one segment (~10s) then stall — proxy was store-and-forward. | Fixed | 2026-07-16 |
+| BUG-020 | 2026-07-16 | Angel TV still stalled after streaming fix: player awaited prefetch (store-and-forward again) and started on 720p/2Mbps variant. | Fixed | 2026-07-16 |
+| BUG-021 | 2026-07-16 | Forcing lowest ABR + background segment prefetch made Angel TV worse (bandwidth fight / tiny variant). Reverted; keep streaming only. | Fixed | 2026-07-16 |
 
 ## Details
 
@@ -370,3 +377,141 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
    - A push to `main` with a bumped `_version.py` (no existing release for that version) results in `should_release=true` and the full pipeline running.
    - A tag push where the tag doesn't match `_version.py` still fails `plan` immediately with a clear `::error::`.
 2. There's no unit test for this (it's a GitHub Actions workflow, not app code) — verify by inspecting a real run via `gh run list` / `gh run view` after pushing, per the [Versioning](DevReadme.md#versioning) section.
+
+### BUG-015 — HLS playback stalls between segments
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** Some streams play for roughly one segment (~5–15s), then pause/buffer while the next `.ts` chunk downloads through the local proxy.
+- **Cause:** The proxy was store-and-forward (full segment before any bytes returned to the player) with a new HTTP client per request and no segment cache. hls.js used near-default buffer targets, so live playback sat on a thin cushion and underran whenever the next chunk was slow.
+- **Fix:**
+  - When serving a media playlist, background-prefetch listed media segments into a short-TTL in-memory cache; player GETs hit the cache (and coalesce with in-flight prefetch).
+  - Reuse a shared `httpx2.AsyncClient` for proxy fetches (connection pooling).
+  - Raise hls.js `maxBufferLength` / live sync so the player keeps ~30s buffered ahead.
+- **Notes:** Prefetch is best-effort; dead CDNs still fail. Nested `.m3u8` variant URIs are not prefetched as segments.
+
+#### AI instructions (regression workflow)
+
+1. `tests/test_known_issues.py::TestSegmentPrefetch` must keep passing: serving a media playlist warms segment URLs into `_segment_cache`, and a subsequent proxy GET for that segment must not add another upstream call.
+2. `stream_viewer/static/app.js` `new Hls({...})` must keep a raised `maxBufferLength` (not bare defaults only).
+3. Manual: play a live channel that previously stalled mid-segment; buffer % / continuous play should hold through several chunk boundaries.
+
+### BUG-016 — Subtitle / KEY URIs 404 via proxy
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** Logs show repeated `GET /api/proxy/s/{session}/en-vtt/index.m3u8` → 404 while video segment GETs return 200.
+- **Cause:** `rewrite_m3u8` computed proxied `URI=` values for `#EXT-X-MEDIA` / `#EXT-X-KEY`, then appended the original `raw` line (`raw if raw.startswith("#")`), discarding the rewrite. hls.js resolved the leftover relative path against the proxied playlist URL.
+- **Fix:** Append the rewritten tag line for MEDIA/KEY; keep `raw` only for other comment lines.
+
+#### AI instructions (regression workflow)
+
+1. `tests/test_known_issues.py::TestMediaTagUriRewrite` must keep passing — unit rewrite
+   checks *and* end-to-end proxy tests for subtitle (`en-vtt/index.m3u8`) and KEY URIs.
+2. Serving a master playlist with `#EXT-X-MEDIA:...URI="en-vtt/index.m3u8"` must not leave
+   that relative path in the response body; the MEDIA `URI=` must be `/api/proxy/s/.../{16-hex}`.
+3. The broken relative path `/api/proxy/s/{session}/en-vtt/index.m3u8` must 404; the rewritten
+   proxy URI must return the upstream subtitle playlist (200).
+4. Do not reintroduce `lines.append(raw if raw.startswith("#") else line)` after rewriting
+   MEDIA/KEY tags — that discards the proxied URI (the original BUG-016 cause).
+
+### BUG-017 — Non-http playlist URIs 400 the proxy
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** Access log shows `GET /api/proxy/s/{session}/{hex}` → **400** mixed with 200s for the same session (unlike BUG-016's `…/en-vtt/index.m3u8` 404s).
+- **Cause:** `rewrite_m3u8` called `proxy_path` → `validate_remote_url` on every `URI=` / segment line. DRM schemes like `skd://` raised HTTP 400 and aborted the entire playlist response, so the player never got the http(s) segments.
+- **Fix:** `proxied_or_original` / `is_http_url` — only proxy `http`/`https` refs; leave other schemes unchanged. Also rewrite `#EXT-X-MAP` http URIs (fMP4 init).
+
+#### AI instructions (regression workflow)
+
+1. `tests/test_known_issues.py::TestNonHttpPlaylistUris` must keep passing.
+2. A media playlist with `#EXT-X-KEY:…URI="skd://…"` must return **200** from the proxy with the `skd://` URI intact and segment lines rewritten to `/api/proxy/s/…`.
+3. Do not call `validate_remote_url` / `proxy_path` on non-http(s) playlist refs during rewrite.
+
+### BUG-018 — Prefetch InvalidURL / unretrieved Future
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** Server log shows `Future exception was never retrieved` with
+  `httpx2.InvalidURL: Invalid non-printable ASCII character in URL, '\x02'…`
+  while nearby proxy GETs still return 200.
+- **Cause:** Background segment prefetch pulled a corrupt playlist line (control
+  char in the URL). `InvalidURL` is not an `HTTPError`, so it escaped
+  `fetch_upstream`'s retry handler; `_load_segment` stuffed it into an asyncio
+  Future via `set_exception` then re-raised, and with no other waiter asyncio
+  warned that the Future exception was never retrieved.
+- **Fix:** `is_http_url` rejects control characters (so rewrite/prefetch skip
+  them); catch `httpx2.InvalidURL` explicitly; call `fut.exception()` after
+  `set_exception` so the failure is marked retrieved.
+
+#### AI instructions (regression workflow)
+
+1. `tests/test_known_issues.py::TestCorruptPlaylistUrls` must keep passing.
+2. Prefetch must not attempt URLs containing characters with `ord(ch) < 32`.
+3. `_load_segment` failure path must not leave an asyncio Future with an
+   unretrieved exception.
+
+### BUG-019 — Long segments on slow CDNs stall after ~10s (Angel TV)
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** "Angel TV America (720p)" plays roughly one segment (~10s) then stops.
+- **Cause:** Stream uses Wowza/Akamai `ngrp:` adaptive HLS with only ~3 segments in the
+  live window, each ~9–12s / ~2MB. Upstream download is often slower than realtime.
+  The proxy waited for the **entire** segment before sending bytes to the player
+  (store-and-forward), so after the first chunk drained the buffer the next chunk
+  was still downloading.
+- **Fix:** Stream media segments with `StreamingResponse` as bytes arrive; lengthen
+  upstream read timeout; start hls.js ABR with a modest `abrEwmaDefaultEstimate` and
+  longer `fragLoadingTimeOut` so 720p is not assumed on unknown bandwidth.
+
+#### AI instructions (regression workflow)
+
+1. `tests/test_known_issues.py::TestSegmentStreaming` must keep passing.
+2. Proxy path for `video/MP2T` / `.ts` must use streaming, not only
+   `Response(content=full_body)`.
+3. Playlists must still be fully buffered and URI-rewritten.
+
+### BUG-020 — Residual Angel TV stalls after streaming
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** After BUG-019 streaming, Angel TV stalled less but still underran.
+- **Cause:** (1) Proxy awaited in-flight prefetch and returned a full buffered body,
+  undoing streaming for the player. (2) Master listed 720p first; hls.js started there
+  (~2MB / 10s segments) on a CDN slower than realtime.
+- **Fix:** Never await prefetch on the player path (cache-hit only); tee streamed
+  bytes into the segment cache; sort master variants lowest-BANDWIDTH first; pin
+  hls.js `startLevel`/`currentLevel` to 0 with conservative ABR.
+
+#### AI instructions (regression workflow)
+
+1. `TestSegmentStreaming::test_master_variants_sorted_lowest_bandwidth_first` and
+   `test_proxy_rewrites_master_lowest_first` must keep passing.
+2. `api_proxy_session` must not await `_segment_inflight` before streaming to the client.
+3. `app.js` must keep `startLevel: 0` / `currentLevel = 0` on MANIFEST_PARSED.
+
+### BUG-021 — Lowest-ABR / prefetch made Angel TV worse
+
+- **Reported:** 2026-07-16
+- **Status:** Fixed
+- **Fixed:** 2026-07-16
+- **Symptom:** After BUG-020 (force lowest variant + sort master), stalls got worse.
+- **Cause:** Background prefetch raced the player's streamed downloads on a slow CDN
+  (half the bandwidth each). Forcing 240p/`startLevel: 0` also fought ABR and did not
+  fix the fundamental slow-segment problem.
+- **Fix:** Stop playlist-time segment prefetch; stop master reordering and forced
+  `currentLevel = 0`. Keep segment streaming + cache tee + long frag timeout.
+
+#### AI instructions (regression workflow)
+
+1. `test_proxy_does_not_prefetch_media_segments` must keep passing.
+2. Do not re-enable blanket media-playlist prefetch without a non-competing design
+   (e.g. only warm *next* segment after the player finishes the current one).

@@ -6,4 +6,4 @@ version from here (see [tool.hatch.version]) so there's only one place
 to edit.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.6"
