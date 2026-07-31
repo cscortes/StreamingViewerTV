@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">StreamingViewerTV</string>
+    <string name="starting_server">Starting local viewer… (%1$d)</string>
+    <string name="server_start_failed">Could not start the local viewer. Check that viewer.db was bundled (make android-sync-db) and see logcat for ViewerService.</string>
+    <string name="webview_error">Failed to load the viewer UI.</string>
+    <string name="notification_channel">Viewer server</string>
+    <string name="notification_title">StreamingViewerTV</string>
+    <string name="notification_text">Local viewer running on port 8787</string>
+    <string name="notification_stop">Stop</string>
+</resources>

@@ -1,0 +1,5 @@
+# Bundled catalog for first launch. Do not commit the DB (large).
+# Populate with: make android-sync-db
+*
+!.gitkeep
+!README.md

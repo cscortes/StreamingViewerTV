@@ -7,15 +7,20 @@
 #   make run           # start the FastAPI UI
 #   make bundle-linux    # PyInstaller onedir build — must run on Linux
 #   make bundle-windows  # PyInstaller onedir build — must run on Windows
+#   make android-sync-db # copy viewer.db into Android APK assets
+#   make bundle-android  # Chaquopy debug APK (needs Android SDK + JDK 17)
 #   make clean         # remove generated data under iptv_export/
 #   make test          # run all tests including Playwright UI (must pass)
 
-.PHONY: info build build-probed probe run sync clean test help bundle-linux bundle-windows
+.PHONY: info build build-probed probe run sync clean test help bundle-linux bundle-windows android-sync-db bundle-android
 
 UV ?= uv
 EXPORT := iptv_export
 DB := $(EXPORT)/viewer.db
 DIST := dist/StreamingViewerTV
+ANDROID_DIR := android
+ANDROID_ASSETS_DB := $(ANDROID_DIR)/app/src/main/assets/iptv_export/viewer.db
+ANDROID_APK := $(ANDROID_DIR)/app/build/outputs/apk/debug/app-debug.apk
 
 # Probe knobs (override on the command line):
 #   make probe LIMIT=50
@@ -39,6 +44,8 @@ info help:
 	@echo "  make sync          Install/update deps (uv sync)"
 	@echo "  make bundle-linux    Build a onedir desktop bundle — must run on Linux"
 	@echo "  make bundle-windows  Build a onedir desktop bundle — must run on Windows"
+	@echo "  make android-sync-db Copy $(DB) into Android APK assets"
+	@echo "  make bundle-android  Build Chaquopy debug APK (Android SDK + JDK 17)"
 	@echo "  make clean         Remove generated data under $(EXPORT)/"
 	@echo "  make test          Run all tests including Playwright UI (must pass)"
 	@echo ""
@@ -51,6 +58,7 @@ info help:
 	@echo "Layout:"
 	@echo "  builder/        offline pipeline → $(DB)"
 	@echo "  stream_viewer/  FastAPI UI (reads $(DB))"
+	@echo "  android/        Chaquopy APK shell (see android/README.md)"
 	@echo ""
 	@echo "Data status:"
 	@if [ -f "$(DB)" ]; then \
@@ -65,6 +73,11 @@ print(f\"       streams={s['streams']} programmes={s['programmes']} source={s['s
 		echo "  [ok] $(EXPORT)/streams_probed.csv ($$(du -h "$(EXPORT)/streams_probed.csv" | cut -f1))"; \
 	else \
 		echo "  [missing] streams_probed.csv — run: make probe"; \
+	fi
+	@if [ -f "$(ANDROID_ASSETS_DB)" ]; then \
+		echo "  [ok] $(ANDROID_ASSETS_DB) ($$(du -h "$(ANDROID_ASSETS_DB)" | cut -f1))"; \
+	else \
+		echo "  [missing] Android assets DB — run: make android-sync-db"; \
 	fi
 
 sync:
@@ -141,6 +154,35 @@ bundle-windows:
 		echo "[warn] $(DB) missing — bundle has no catalog; run: make build"; \
 	fi
 	@echo "Bundled: $(DIST)/  (run: $(DIST)/StreamingViewerTV.exe)"
+
+# Copy catalog into APK assets (not committed — large binary).
+android-sync-db:
+	@if [ ! -f "$(DB)" ]; then \
+		echo "Missing $(DB). Run: make build  or  make build-probed"; \
+		exit 1; \
+	fi
+	@mkdir -p "$(dir $(ANDROID_ASSETS_DB))"
+	cp "$(DB)" "$(ANDROID_ASSETS_DB)"
+	@echo "Synced: $(ANDROID_ASSETS_DB) ($$(du -h "$(ANDROID_ASSETS_DB)" | cut -f1))"
+
+# Chaquopy debug APK. Requires Android SDK (sdk.dir in android/local.properties) and JDK 17.
+bundle-android: android-sync-db
+	@if [ ! -f "$(ANDROID_DIR)/local.properties" ]; then \
+		if [ -n "$$ANDROID_HOME" ]; then \
+			echo "sdk.dir=$$ANDROID_HOME" > "$(ANDROID_DIR)/local.properties"; \
+			echo "Wrote $(ANDROID_DIR)/local.properties from ANDROID_HOME"; \
+		elif [ -n "$$ANDROID_SDK_ROOT" ]; then \
+			echo "sdk.dir=$$ANDROID_SDK_ROOT" > "$(ANDROID_DIR)/local.properties"; \
+			echo "Wrote $(ANDROID_DIR)/local.properties from ANDROID_SDK_ROOT"; \
+		else \
+			echo "Android SDK not configured. Copy android/local.properties.example → android/local.properties and set sdk.dir, or export ANDROID_HOME."; \
+			echo "See android/README.md"; \
+			exit 1; \
+		fi; \
+	fi
+	cd $(ANDROID_DIR) && ./gradlew :app:assembleDebug
+	@echo "APK: $(ANDROID_APK)"
+	@echo "Install: adb install -r $(ANDROID_APK)"
 
 clean:
 	@echo "Removing generated files under $(EXPORT)/ …"

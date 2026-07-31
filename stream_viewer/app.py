@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 import secrets
 import sys
@@ -15,7 +16,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import httpx2
+try:
+    import httpx2
+except ImportError:  # Chaquopy Android build uses httpx (httpx2 needs newer idna).
+    import httpx as httpx2
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,20 +37,33 @@ def resolve_app_paths(
     executable: str,
     module_file: str,
     meipass: str | None,
+    android: bool = False,
+    home: str | None = None,
 ) -> tuple[Path, Path, Path]:
-    """Resolve (export_dir, static_dir, templates_dir) for both dev and PyInstaller-frozen runs.
+    """Resolve (export_dir, static_dir, templates_dir) for dev, PyInstaller, and Android.
 
     Frozen: data (viewer.db) lives next to the executable so it persists across app
     updates/reinstalls; bundled resources (static/templates) live under PyInstaller's
-    extraction dir (_MEIPASS). Dev: everything resolves relative to this file, as before.
+    extraction dir (_MEIPASS).
+
+    Android (Chaquopy): writable catalog under $HOME/iptv_export; static/templates
+    ship inside the stream_viewer package next to this module.
+
+    Dev: everything resolves relative to this file, as before.
     """
+    app_dir = Path(module_file).resolve().parent
+
+    if android:
+        home_root = Path(home) if home else Path(os.environ.get("HOME", "."))
+        export_dir = home_root / "iptv_export"
+        return export_dir, app_dir / "static", app_dir / "templates"
+
     if frozen:
         root = Path(executable).resolve().parent
         resource_root = Path(meipass) if meipass else root
         app_dir = resource_root / "stream_viewer"
     else:
-        root = Path(module_file).resolve().parent.parent
-        app_dir = Path(module_file).resolve().parent
+        root = app_dir.parent
 
     export_dir = root / "iptv_export"
     return export_dir, app_dir / "static", app_dir / "templates"
@@ -57,6 +74,8 @@ EXPORT_DIR, STATIC_DIR, TEMPLATES_DIR = resolve_app_paths(
     executable=sys.executable,
     module_file=__file__,
     meipass=getattr(sys, "_MEIPASS", None),
+    android=os.environ.get("STREAM_VIEWER_ANDROID") == "1",
+    home=os.environ.get("HOME"),
 )
 ROOT = EXPORT_DIR.parent
 
@@ -1161,11 +1180,20 @@ async def api_proxy_session(
     )
 
 
-def main() -> None:
-    import os
-    import webbrowser
+def run_server(host: str = "127.0.0.1", port: int = 8787) -> None:
+    """Start uvicorn with the FastAPI app object (no browser).
 
+    Used by the Android Chaquopy Service and by desktop main() after optionally
+    opening a browser. Pass the app object (not an import string) — import
+    strings can be unreliable inside a PyInstaller-frozen executable.
+    """
     import uvicorn
+
+    uvicorn.run(app, host=host, port=port, reload=False)
+
+
+def main() -> None:
+    import webbrowser
 
     host = "127.0.0.1"
     port = 8787
@@ -1177,9 +1205,7 @@ def main() -> None:
 
         threading.Thread(target=_open_browser, daemon=True).start()
 
-    # Pass the app object (not an import string) — import strings can be
-    # unreliable to resolve inside a PyInstaller-frozen executable.
-    uvicorn.run(app, host=host, port=port, reload=False)
+    run_server(host=host, port=port)
 
 
 if __name__ == "__main__":

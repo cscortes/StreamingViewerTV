@@ -52,3 +52,31 @@ def test_frozen_mode_without_meipass_falls_back_to_executable_dir():
         meipass=None,
     )
     assert static_dir == Path("/opt/StreamingViewerTV/stream_viewer/static")
+
+
+def test_android_mode_puts_catalog_under_home():
+    """Chaquopy sets HOME to app internal storage; catalog must be writable there."""
+    module_file = "/data/data/com.streamingviewertv.app/files/chaquopy/AssetFinder/app/stream_viewer/app.py"
+    export_dir, static_dir, templates_dir = resolve_app_paths(
+        frozen=False,
+        executable="/system/bin/app_process",
+        module_file=module_file,
+        meipass=None,
+        android=True,
+        home="/data/data/com.streamingviewertv.app/files",
+    )
+    assert export_dir == Path("/data/data/com.streamingviewertv.app/files/iptv_export")
+    assert static_dir == Path(module_file).parent / "static"
+    assert templates_dir == Path(module_file).parent / "templates"
+
+
+def test_android_mode_takes_precedence_over_frozen():
+    export_dir, _static_dir, _templates_dir = resolve_app_paths(
+        frozen=True,
+        executable="/opt/StreamingViewerTV/StreamingViewerTV",
+        module_file="/data/app/stream_viewer/app.py",
+        meipass="/tmp/_MEI999",
+        android=True,
+        home="/data/data/com.streamingviewertv.app/files",
+    )
+    assert export_dir == Path("/data/data/com.streamingviewertv.app/files/iptv_export")

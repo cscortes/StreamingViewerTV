@@ -17,3 +17,16 @@ dist/
 build/
 .python-version
 .pytest_cache/
+
+# Android / Chaquopy
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/python/stream_viewer/
+android/captures/
+*.apk
+*.ap_
+*.dex
+.idea/
+*.iml
