@@ -809,7 +809,10 @@ def test_index_html_server_renders_category_filter(client: TestClient):
 def test_index_html_shows_current_version_in_status_bar(client: TestClient):
     """The running app version (single source: stream_viewer/_version.py) must be visible."""
     html = client.get("/").text
+    assert 'id="statusVersionItem"' in html
     assert "status-version" in html
+    # Compact chrome hides .status-extra behind Details — version must stay essential.
+    assert "status-version status-extra" not in html
     assert viewer.__version__ in html
 
 

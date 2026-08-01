@@ -7,11 +7,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css?v=4" />
+  <link rel="stylesheet" href="/static/app.css?v=13" />
   <script src="/static/hls.min.js" defer></script>
-  <script src="/static/app.js?v=5" defer></script>
+  <script src="/static/app.js?v=13" defer></script>
 </head>
-<body>
+<body class="ui-chrome-compact">
   <div class="atmosphere" aria-hidden="true"></div>
 
   <header class="topbar">
@@ -24,6 +24,57 @@
     <div class="search-wrap">
       <input id="searchInput" type="search" placeholder="Search channels…" autocomplete="off" />
     </div>
+
+    <div class="compact-actions" id="compactActions">
+      <div class="update-available" id="updateAvailable" hidden>
+        <a
+          class="update-available-link"
+          id="updateAvailableLink"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Update available</a>
+        <button
+          type="button"
+          class="update-available-dismiss"
+          id="updateAvailableDismiss"
+          aria-label="Dismiss update notice"
+        >&times;</button>
+      </div>
+      <button type="button" class="ghost-btn compact-btn" id="filtersToggleBtn" aria-expanded="false" aria-controls="filterForm">
+        Filters
+        <span class="filters-badge" id="filtersBadge" hidden>0</span>
+      </button>
+      <button
+        type="button"
+        class="ghost-btn compact-btn"
+        id="favoritesToggleBtn"
+        aria-pressed="false"
+        title="Favorites are saved in this browser only and may be cleared by the OS or browser."
+      >
+        Favorites
+      </button>
+      <button type="button" class="ghost-btn compact-btn" id="channelsToggleBtn" aria-expanded="false" aria-controls="sidebar">
+        Channels
+      </button>
+      <button
+        type="button"
+        class="ghost-btn compact-btn"
+        id="shareBtn"
+        aria-expanded="false"
+        aria-controls="shareDialog"
+        title="Share download link"
+      >
+        Share
+      </button>
+      <button type="button" class="solid-btn compact-btn" id="browseToggleBtn">Hide channels</button>
+      <button type="button" class="ghost-btn reset-btn" id="resetFiltersBtnCompact">Reset</button>
+    </div>
+
+    <p class="favorites-hint" id="favoritesHint" hidden>
+      <span>Favorites stay on this device/browser and can be wiped by the OS.</span>
+      <button type="button" class="favorites-hint-dismiss" id="favoritesHintDismiss">Dismiss</button>
+    </p>
 
     <form id="filterForm" class="filters" aria-label="Stream filters">
       {% for field, meta in filters.items() %}
@@ -45,6 +96,52 @@
       <button type="button" class="ghost-btn reset-btn" id="resetFiltersBtn">Reset</button>
     </div>
   </section>
+
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+
+  <button type="button" class="show-sidebar-btn" id="showSidebarBtn" aria-controls="sidebar" title="Show channel list (T)">
+    Show channels
+  </button>
+
+  <div class="filter-sheet-panel" id="filterSheetPanel" hidden role="dialog" aria-label="Filters">
+    <div class="filter-sheet-chrome" id="filterSheetChrome">
+      <h3>Filters</h3>
+      <button type="button" class="ghost-btn reset-btn" id="filterSheetDoneBtn">Done</button>
+    </div>
+    <div class="filter-sheet-body" id="filterSheetBody"></div>
+  </div>
+
+  <div
+    class="share-dialog"
+    id="shareDialog"
+    hidden
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="shareDialogTitle"
+  >
+    <div class="share-dialog-chrome">
+      <h3 id="shareDialogTitle">Share with friends</h3>
+      <button type="button" class="ghost-btn reset-btn" id="shareDialogCloseBtn">Close</button>
+    </div>
+    <div class="share-dialog-body">
+      <img
+        class="share-qr"
+        id="shareQr"
+        src="/static/share-releases-qr.png"
+        width="196"
+        height="196"
+        alt="QR code linking to the StreamingViewerTV GitHub releases page"
+      />
+      <p class="share-copy">Scan to open the download page on GitHub.</p>
+      <a
+        class="share-link"
+        id="shareReleaseLink"
+        href="https://github.com/cscortes/StreamingViewerTV/releases/latest"
+        target="_blank"
+        rel="noopener noreferrer"
+      >github.com/cscortes/StreamingViewerTV/releases</a>
+    </div>
+  </div>
 
   <main class="layout" id="layout">
     <aside class="sidebar" id="sidebar">
@@ -77,7 +174,7 @@
         <div class="now-playing" id="nowPlaying" hidden>
           <div class="now-meta">
             <img id="nowLogo" alt="" hidden />
-            <div>
+            <div class="now-text">
               <div class="now-title-row">
                 <h2 id="nowTitle">—</h2>
                 <span class="now-programme" id="nowProgramme" data-state="empty">No data</span>
@@ -86,7 +183,8 @@
               <p id="nowDetails">—</p>
             </div>
           </div>
-          <div class="view-controls">
+          <button type="button" class="ghost-btn more-btn" id="moreControlsBtn" aria-expanded="false" aria-controls="viewControls" title="More controls">⋯</button>
+          <div class="view-controls" id="viewControls">
             <button type="button" class="solid-btn" id="theaterBtn">Theater</button>
             <button type="button" class="solid-btn" id="fullscreenBtn">Fullscreen</button>
             <a class="ghost-btn" id="openRaw" href="#" target="_blank" rel="noopener">Open URL</a>
@@ -98,27 +196,32 @@
   </main>
 
   <footer class="status-bar" id="statusBar" aria-live="polite">
-    <div class="status-group">
-      <span class="status-item"><span class="status-label">Streams</span> <strong id="statusCatalog">0</strong></span>
+    <div class="status-group status-group-essential">
       <span class="status-item"><span class="status-label">Matches</span> <strong id="statusMatches">0</strong></span>
-      <span class="status-item"><span class="status-label">Listed</span> <strong id="statusListed">0</strong></span>
-      <span class="status-item"><span class="status-label">tvg_id</span> <strong id="statusTvg">0</strong></span>
-      <span class="status-item status-guide">
-        <span class="status-dot" id="statusGuideDot" data-state="idle"></span>
-        <span class="status-label">Guide</span>
-        <strong id="statusGuide">Idle</strong>
-      </span>
-    </div>
-    <div class="status-group status-group-playback">
       <span class="status-item status-playback">
         <span class="status-dot" id="statusDot" data-state="idle"></span>
         <span class="status-label">Playback</span>
         <strong id="statusPlayback">Idle</strong>
       </span>
-      <span class="status-item"><span class="status-label">Errors</span> <strong id="statusErrors">0</strong></span>
       <span class="status-item status-message" id="statusMessage" title="">Ready</span>
-      <span class="status-item status-version"><span class="status-label">v</span><strong>{{ version }}</strong></span>
+      <span class="status-item status-version" id="statusVersionItem">
+        <span class="status-label">v</span><strong id="statusVersionValue">{{ version }}</strong>
+      </span>
     </div>
+    <div class="status-group status-group-details" id="statusDetails">
+      <span class="status-item status-extra"><span class="status-label">Streams</span> <strong id="statusCatalog">0</strong></span>
+      <span class="status-item status-extra"><span class="status-label">Listed</span> <strong id="statusListed">0</strong></span>
+      <span class="status-item status-extra"><span class="status-label">tvg_id</span> <strong id="statusTvg">0</strong></span>
+      <span class="status-item status-guide status-extra">
+        <span class="status-dot" id="statusGuideDot" data-state="idle"></span>
+        <span class="status-label">Guide</span>
+        <strong id="statusGuide">Idle</strong>
+      </span>
+      <span class="status-item status-extra"><span class="status-label">Errors</span> <strong id="statusErrors">0</strong></span>
+    </div>
+    <button type="button" class="ghost-btn status-details-btn" id="statusDetailsBtn" aria-expanded="false" aria-controls="statusDetails">
+      Details
+    </button>
   </footer>
 </body>
 </html>

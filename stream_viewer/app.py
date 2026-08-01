@@ -92,6 +92,12 @@ SEGMENT_CACHE_TTL_SEC = 90
 SEGMENT_CACHE_MAX_ENTRIES = 48
 VIEWER_DB_ID = "viewer.db"
 
+GITHUB_RELEASES_LATEST_URL = (
+    "https://api.github.com/repos/cscortes/StreamingViewerTV/releases/latest"
+)
+UPDATE_CHECK_CACHE_TTL_SEC = 6 * 60 * 60
+UPDATE_CHECK_TIMEOUT = httpx2.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
+
 
 def viewer_db_path() -> Path:
     return EXPORT_DIR / VIEWER_DB_ID
@@ -319,6 +325,101 @@ _http_client: httpx2.AsyncClient | None = None
 _segment_cache_lock = threading.Lock()
 _segment_cache: dict[str, dict[str, Any]] = {}
 _segment_inflight: dict[str, asyncio.Future[tuple[bytes, str]]] = {}
+_update_cache: dict[str, Any] | None = None
+_update_cache_at: float = 0.0
+
+
+def parse_semver(version: str) -> tuple[int, int, int] | None:
+    """Parse ``X.Y.Z`` or ``vX.Y.Z`` into an integer tuple; None if invalid."""
+    text = (version or "").strip()
+    if text[:1] in ("v", "V"):
+        text = text[1:]
+    parts = text.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    """True when ``latest`` is a valid semver strictly greater than ``current``."""
+    latest_parts = parse_semver(latest)
+    current_parts = parse_semver(current)
+    if latest_parts is None or current_parts is None:
+        return False
+    return latest_parts > current_parts
+
+
+def clear_update_cache() -> None:
+    """Reset the in-process update-check cache (tests / forced refresh)."""
+    global _update_cache, _update_cache_at
+    _update_cache = None
+    _update_cache_at = 0.0
+
+
+def _empty_update_status() -> dict[str, Any]:
+    return {
+        "current": __version__,
+        "latest": None,
+        "update_available": False,
+        "release_url": None,
+    }
+
+
+async def fetch_update_status() -> dict[str, Any]:
+    """Compare running version to GitHub latest release; fail-soft + cached."""
+    global _update_cache, _update_cache_at
+    now = time.monotonic()
+    if _update_cache is not None and (now - _update_cache_at) < UPDATE_CHECK_CACHE_TTL_SEC:
+        return _update_cache
+
+    result = _empty_update_status()
+    client = _http_client
+    if client is None:
+        return result
+
+    try:
+        response = await client.get(
+            GITHUB_RELEASES_LATEST_URL,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": f"StreamingViewerTV/{__version__}",
+            },
+            timeout=UPDATE_CHECK_TIMEOUT,
+        )
+        if response.status_code != 200:
+            _update_cache = result
+            _update_cache_at = now
+            return result
+        payload = response.json()
+        tag = str(payload.get("tag_name") or "").strip()
+        html_url = str(payload.get("html_url") or "").strip() or None
+        latest = tag[1:] if tag[:1] in ("v", "V") else tag
+        if not latest:
+            _update_cache = result
+            _update_cache_at = now
+            return result
+        update_available = is_newer_version(latest, __version__)
+        if update_available and not html_url:
+            release_tag = tag if tag[:1] in ("v", "V") else f"v{latest}"
+            html_url = (
+                "https://github.com/cscortes/StreamingViewerTV/releases/tag/"
+                f"{release_tag}"
+            )
+        result = {
+            "current": __version__,
+            "latest": latest,
+            "update_available": update_available,
+            "release_url": html_url,
+        }
+    except Exception:
+        return result
+
+    _update_cache = result
+    _update_cache_at = now
+    return result
 
 
 def available_sources() -> list[dict[str, Any]]:
@@ -1009,10 +1110,38 @@ async def api_meta(source: str | None = None) -> dict[str, Any]:
     }
 
 
+@app.get("/api/update")
+async def api_update() -> dict[str, Any]:
+    """Return whether a newer GitHub Release exists for this app."""
+    return await fetch_update_status()
+
+
 @app.post("/api/reload")
 async def api_reload(source: str | None = None) -> dict[str, Any]:
     catalog = ensure_catalog(source, force=True)
     return {"source": catalog["source"], "total": catalog["total"]}
+
+
+MAX_STREAM_ID_FILTER = 500
+
+
+def parse_stream_id_filter(request: Request) -> set[int] | None:
+    """Optional `ids` query: comma-separated and/or repeated. Caps at MAX_STREAM_ID_FILTER."""
+    if "ids" not in request.query_params:
+        return None
+    id_set: set[int] = set()
+    for value in request.query_params.getlist("ids"):
+        for part in str(value).replace(",", " ").split():
+            try:
+                stream_id = int(part)
+            except ValueError:
+                continue
+            if stream_id < 0:
+                continue
+            id_set.add(stream_id)
+            if len(id_set) >= MAX_STREAM_ID_FILTER:
+                return id_set
+    return id_set
 
 
 @app.get("/api/streams")
@@ -1026,10 +1155,12 @@ async def api_streams(
     catalog = ensure_catalog(source)
     query = q.strip().lower()
     filters = parse_filter_params(request)
+    id_set = parse_stream_id_filter(request)
     matched = [
         public_stream(stream)
         for stream in catalog["streams"]
         if matches_filters(stream, q=query, filters=filters)
+        and (id_set is None or stream["id"] in id_set)
     ]
     page = matched[offset : offset + limit]
     return {

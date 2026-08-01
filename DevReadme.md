@@ -252,6 +252,11 @@ read from that file, so there's only one place to edit:
 __version__ = "0.1.0"
 ```
 
+The viewer also checks GitHub Releases after load via `GET /api/update` (compares the
+running version to `releases/latest`). When a newer release exists, the UI shows a
+dismissible **Update available** link in the toolbar that opens the release page. The
+check is fail-soft (offline / API errors are silent) and cached in-process for six hours.
+
 Bump it with each change, per [semver](https://semver.org/):
 
 - **Patch** (`0.1.0` → `0.1.1`) for a `BUG-XXX` fix in [buglist.md](buglist.md)

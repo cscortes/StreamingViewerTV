@@ -26,6 +26,11 @@
 | BUG-019 | 2026-07-16 | Streams with long/large HLS segments on slow CDNs (e.g. Angel TV America) play ~one segment (~10s) then stall — proxy was store-and-forward. | Fixed | 2026-07-16 |
 | BUG-020 | 2026-07-16 | Angel TV still stalled after streaming fix: player awaited prefetch (store-and-forward again) and started on 720p/2Mbps variant. | Fixed | 2026-07-16 |
 | BUG-021 | 2026-07-16 | Forcing lowest ABR + background segment prefetch made Angel TV worse (bandwidth fight / tiny variant). Reverted; keep streaming only. | Fixed | 2026-07-16 |
+| FEAT-004 | 2026-08-01 | Compact chrome UI: Filters sheet, docked/resizable channel sidebar (desktop) or overlay drawer (narrow), overflow view controls, and collapsible status Details. | Done | 2026-08-01 |
+| FEAT-005 | 2026-08-01 | Unify desktop and Android GitHub Actions releases: one probed catalog, parallel platform builds, single publish; Gradle version from `_version.py`. | Done | 2026-08-01 |
+| FEAT-006 | 2026-08-01 | Check GitHub Releases for a newer app version and show a dismissible “Update available” notice in the toolbar. | Done | 2026-08-01 |
+| FEAT-007 | 2026-08-01 | Star channels as favorites (localStorage); Favorites filter; Reset clears search/filters only, not starred channels. | Done | 2026-08-01 |
+| FEAT-008 | 2026-08-01 | Share dialog with QR code linking to the GitHub Releases download page. | Done | 2026-08-01 |
 
 ## Details
 
@@ -515,3 +520,121 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
 1. `test_proxy_does_not_prefetch_media_segments` must keep passing.
 2. Do not re-enable blanket media-playlist prefetch without a non-competing design
    (e.g. only warm *next* segment after the player finishes the current one).
+
+### FEAT-004 — Compact chrome UI (desktop + Android WebView)
+
+- **Reported:** 2026-08-01
+- **Status:** Done
+- **Fixed:** 2026-08-01
+- **Notes:**
+  - Slim toolbar always on (`ui-chrome-compact`): search plus **Filters** / **Channels** /
+    **Hide channels** / **Reset** instead of a permanent filter row.
+  - Filters open in a sheet/panel with an active-filter badge on the Filters button.
+  - Wide desktop: channel list is a docked, resizable sidebar. Narrow / coarse-pointer
+    viewports: Channels opens an overlay drawer over a backdrop (better for phones).
+  - Theater / Fullscreen / Open URL live under a ⋯ overflow control.
+  - Status bar shows essentials (Matches, Playback, message); **Details** expands the rest
+    (catalog counts, guide, errors, version).
+  - Ships in **0.5.0** with desktop bundles and the Android debug APK.
+
+#### AI instructions (regression workflow)
+
+1. Keep `body.ui-chrome-compact` and the compact toolbar controls wired in
+   `templates/index.html` + `static/app.js` (filters sheet, channels drawer / docked
+   sidebar, status Details toggle).
+2. Narrow breakpoint behavior must remain driven by the `NARROW_MQ` matchMedia query —
+   do not hardcode phone-only CSS that breaks desktop docked sidebar.
+3. Manual smoke: desktop — Filters sheet, hide/show sidebar (T), Details expand;
+   narrow width — Channels overlay + Filters sheet with backdrop.
+
+### FEAT-005 — Unified desktop + Android release pipeline
+
+- **Reported:** 2026-08-01
+- **Status:** Done
+- **Fixed:** 2026-08-01
+- **Notes:**
+  - Removed standalone `.github/workflows/android.yml` (tag / `workflow_dispatch` only,
+    unprobed catalog, separate release attach).
+  - `build-android` is now a sibling of `build-windows` / `build-linux` / `build-macos`
+    in `.github/workflows/release.yml`, consuming the shared probed `viewer-db` artifact.
+  - `publish-release` attaches `StreamingViewerTV-<tag>-android-debug.apk` with the
+    desktop archives via one `gh release create`.
+  - Android `versionName` / `versionCode` are derived from `stream_viewer/_version.py`
+    in `android/app/build.gradle.kts` (same source of truth as `plan`).
+  - Documented in [DevReadme.md](DevReadme.md#versioning) (incl. pipeline diagram) and
+    [android/README.md](android/README.md).
+
+#### AI instructions (regression workflow)
+
+1. There must be no `.github/workflows/android.yml`; Android packaging lives only in
+   `release.yml`'s `build-android` job.
+2. `build-android` must download `viewer-db` (not run `make build`) and upload a
+   versioned `StreamingViewerTV-${{ needs.plan.outputs.tag }}-android-debug.apk`.
+3. `publish-release` must `needs` all four platform jobs and pass the APK into
+   `gh release create`.
+4. Verify after a real `0.4.0` (or later) release run that the GitHub Release includes
+   Win/Linux/macOS archives **and** the Android APK.
+
+### FEAT-006 — In-app “Update available” check
+
+- **Reported:** 2026-08-01
+- **Status:** Done
+- **Fixed:** 2026-08-01
+- **Notes:**
+  - `GET /api/update` compares `stream_viewer._version.__version__` to the latest GitHub
+    Release (`/repos/cscortes/StreamingViewerTV/releases/latest`), with a 6-hour
+    in-process cache and fail-soft behavior offline / on API errors.
+  - Toolbar shows a dismissible **Update available** link (`#updateAvailable`) when a
+    newer release exists; dismiss stores `dismissedUpdateVersion` in the prefs cookie.
+  - Status-bar version becomes a link to the release page when an update is available.
+  - Canonical tests: `tests/test_update_check.py`.
+
+#### AI instructions (regression workflow)
+
+1. Assert `/api/update` returns `update_available: true` when the mocked latest tag is
+   newer than `__version__`, and `false` for same/older/network failure.
+2. Assert index HTML includes `#updateAvailable` / `#updateAvailableLink` /
+   `#updateAvailableDismiss`, and `app.js` calls `fetch("/api/update")` after bootstrap.
+3. Dismiss must persist via `dismissedUpdateVersion` and not re-show that same latest
+   until a newer latest appears.
+
+### FEAT-007 — Channel favorites
+
+- **Reported:** 2026-08-01
+- **Status:** Done
+- **Fixed:** 2026-08-01
+- **Notes:**
+  - Each channel row has a star button; starred IDs persist in `localStorage`
+    (`svtv_favorites`, capped at 500).
+  - Toolbar **Favorites** toggles a favorites-only list via `/api/streams?ids=…`
+    (`parse_stream_id_filter` in `app.py`).
+  - **Reset** clears search and filter dropdowns only — it must not clear starred
+    channels or turn off the Favorites filter. Stars are removed only by tapping the
+    channel’s favorite button.
+  - Hint under the toolbar explains favorites are device/browser-local.
+
+#### AI instructions (regression workflow)
+
+1. Assert index HTML has `#favoritesToggleBtn` and list rows render `.favorite-btn`.
+2. Assert `resetFilters()` does **not** set `state.favoritesOnly = false` or clear
+   `state.favorites` / `localStorage` `svtv_favorites`.
+3. Assert `/api/streams?ids=1,2` returns only those stream IDs (when present).
+
+### FEAT-008 — Share QR to GitHub Releases
+
+- **Reported:** 2026-08-01
+- **Status:** Done
+- **Fixed:** 2026-08-01
+- **Notes:**
+  - Toolbar **Share** opens a dialog with a static QR image
+    (`static/share-releases-qr.png`) encoding
+    `https://github.com/cscortes/StreamingViewerTV/releases/latest`.
+  - Dialog also shows a text link to the same releases page for non-camera use.
+  - Works offline (no remote QR API); Escape / backdrop / Close dismisses the dialog.
+
+#### AI instructions (regression workflow)
+
+1. Assert index HTML has `#shareBtn`, `#shareDialog`, and `#shareQr` pointing at
+   `/static/share-releases-qr.png`.
+2. Assert the share link `href` is the GitHub `releases/latest` URL for this repo.
+3. Manual smoke: Share → scan QR → lands on the GitHub Releases page.

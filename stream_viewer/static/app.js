@@ -15,12 +15,15 @@
     hls: null,
     loading: false,
     theater: false,
+    watchFirst: false,
     sidebarWidth: 340,
     playback: "idle",
     bufferPercent: null,
     streamErrors: 0,
     statusMessage: "Ready",
     statusIsError: false,
+    favorites: new Set(),
+    favoritesOnly: false,
   };
 
   const els = {
@@ -45,6 +48,24 @@
     theaterBtn: document.getElementById("theaterBtn"),
     fullscreenBtn: document.getElementById("fullscreenBtn"),
     openRaw: document.getElementById("openRaw"),
+    moreControlsBtn: document.getElementById("moreControlsBtn"),
+    viewControls: document.getElementById("viewControls"),
+    filtersToggleBtn: document.getElementById("filtersToggleBtn"),
+    favoritesToggleBtn: document.getElementById("favoritesToggleBtn"),
+    favoritesHint: document.getElementById("favoritesHint"),
+    favoritesHintDismiss: document.getElementById("favoritesHintDismiss"),
+    channelsToggleBtn: document.getElementById("channelsToggleBtn"),
+    browseToggleBtn: document.getElementById("browseToggleBtn"),
+    showSidebarBtn: document.getElementById("showSidebarBtn"),
+    resetFiltersBtnCompact: document.getElementById("resetFiltersBtnCompact"),
+    filtersBadge: document.getElementById("filtersBadge"),
+    sheetBackdrop: document.getElementById("sheetBackdrop"),
+    filterSheetPanel: document.getElementById("filterSheetPanel"),
+    filterSheetBody: document.getElementById("filterSheetBody"),
+    filterSheetDoneBtn: document.getElementById("filterSheetDoneBtn"),
+    filterBar: document.getElementById("filterBar"),
+    statusDetailsBtn: document.getElementById("statusDetailsBtn"),
+    statusDetails: document.getElementById("statusDetails"),
     playerStatus: document.getElementById("playerStatus"),
     statusCatalog: document.getElementById("statusCatalog"),
     statusMatches: document.getElementById("statusMatches"),
@@ -56,12 +77,30 @@
     statusPlayback: document.getElementById("statusPlayback"),
     statusErrors: document.getElementById("statusErrors"),
     statusMessage: document.getElementById("statusMessage"),
+    statusVersionItem: document.getElementById("statusVersionItem"),
+    statusVersionValue: document.getElementById("statusVersionValue"),
+    updateAvailable: document.getElementById("updateAvailable"),
+    updateAvailableLink: document.getElementById("updateAvailableLink"),
+    updateAvailableDismiss: document.getElementById("updateAvailableDismiss"),
+    shareBtn: document.getElementById("shareBtn"),
+    shareDialog: document.getElementById("shareDialog"),
+    shareDialogCloseBtn: document.getElementById("shareDialogCloseBtn"),
   };
+
+  /* Narrow / touch: overlay channel drawer. Slim chrome is always on. */
+  const NARROW_MQ = window.matchMedia(
+    "(max-width: 1100px), ((pointer: coarse) and (max-width: 1400px))"
+  );
 
   let searchTimer = null;
 
   const PREFS_COOKIE = "svtv_filters";
   const PREFS_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
+  const FAVORITES_KEY = "svtv_favorites";
+  const FAVORITES_HINT_KEY = "svtv_favorites_hint_seen";
+  const MAX_FAVORITES = 500;
+  const FAVORITES_TOGGLE_TITLE =
+    "Favorites are saved in this browser only and may be cleared by the OS or browser.";
 
   function getCookie(name) {
     const prefix = `${name}=`;
@@ -134,6 +173,14 @@
     if (state.sidebarWidth && state.sidebarWidth !== SIDEBAR_DEFAULT) {
       prefs.sidebarWidth = state.sidebarWidth;
     }
+    if (state.favoritesOnly) prefs.favoritesOnly = true;
+    const existing = readPrefs();
+    if (
+      typeof existing.dismissedUpdateVersion === "string" &&
+      existing.dismissedUpdateVersion
+    ) {
+      prefs.dismissedUpdateVersion = existing.dismissedUpdateVersion;
+    }
     return prefs;
   }
 
@@ -161,6 +208,308 @@
       const width = Number(prefs.sidebarWidth);
       if (Number.isFinite(width)) setSidebarWidth(width);
     }
+    state.favoritesOnly = Boolean(prefs.favoritesOnly);
+    syncFavoritesToggle();
+  }
+
+  function loadFavorites() {
+    try {
+      const raw = localStorage.getItem(FAVORITES_KEY);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      const ids = parsed
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id >= 0)
+        .slice(0, MAX_FAVORITES);
+      return new Set(ids);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function saveFavorites() {
+    try {
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify([...state.favorites]));
+    } catch {
+      // Private mode / quota — favorites stay in memory for this session.
+    }
+  }
+
+  function isFavorite(id) {
+    return state.favorites.has(Number(id));
+  }
+
+  function favoritesHintSeen() {
+    try {
+      return localStorage.getItem(FAVORITES_HINT_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function markFavoritesHintSeen() {
+    try {
+      localStorage.setItem(FAVORITES_HINT_KEY, "1");
+    } catch {
+      // ignore
+    }
+  }
+
+  function showFavoritesHint() {
+    if (!els.favoritesHint || favoritesHintSeen()) return;
+    els.favoritesHint.hidden = false;
+  }
+
+  function hideFavoritesHint({ persist = false } = {}) {
+    if (els.favoritesHint) els.favoritesHint.hidden = true;
+    if (persist) markFavoritesHintSeen();
+  }
+
+  function syncFavoritesToggle() {
+    const btn = els.favoritesToggleBtn;
+    if (!btn) return;
+    btn.setAttribute("aria-pressed", state.favoritesOnly ? "true" : "false");
+    btn.classList.toggle("is-pressed", state.favoritesOnly);
+    btn.title = FAVORITES_TOGGLE_TITLE;
+  }
+
+  function syncFavoriteButton(button, id) {
+    if (!button) return;
+    const on = isFavorite(id);
+    button.classList.toggle("is-favorite", on);
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    button.setAttribute("aria-label", on ? "Remove from favorites" : "Add to favorites");
+    button.title = on ? "Remove from favorites" : "Add to favorites";
+    button.innerHTML = favoriteGlyph(on);
+  }
+
+  function favoriteGlyph(filled) {
+    // Outline vs filled heart — distinct from quality stars.
+    if (filled) {
+      return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12.1 21.35l-1.1-1C5.14 15.24 2 12.39 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.89-3.14 6.74-8.9 11.86l-1 0.99z"/></svg>`;
+    }
+    return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12.1 21.35l-1.1-1C5.14 15.24 2 12.39 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.89-3.14 6.74-8.9 11.86l-1 0.99z"/></svg>`;
+  }
+
+  function toggleFavorite(id) {
+    const streamId = Number(id);
+    if (!Number.isFinite(streamId) || streamId < 0) return;
+    const adding = !state.favorites.has(streamId);
+    if (adding) {
+      if (state.favorites.size >= MAX_FAVORITES) {
+        state.statusMessage = `Favorites limit reached (${MAX_FAVORITES})`;
+        state.statusIsError = true;
+        updateStatusBar();
+        return;
+      }
+      state.favorites.add(streamId);
+    } else {
+      state.favorites.delete(streamId);
+    }
+    saveFavorites();
+    for (const button of els.streamList.querySelectorAll(
+      `.favorite-btn[data-id="${streamId}"]`
+    )) {
+      syncFavoriteButton(button, streamId);
+    }
+    if (adding) showFavoritesHint();
+    if (state.favoritesOnly) {
+      loadStreams({ reset: true });
+    }
+  }
+
+  function hasNarrowingFilters() {
+    if (els.searchInput.value.trim()) return true;
+    for (const select of els.filterForm.querySelectorAll("select[name]")) {
+      if (select.value) return true;
+    }
+    return false;
+  }
+
+  function maybePruneFavorites() {
+    if (!state.favoritesOnly || hasNarrowingFilters()) return;
+    if (state.items.length < state.total) return;
+    const alive = new Set(state.items.map((item) => Number(item.id)));
+    let changed = false;
+    for (const id of [...state.favorites]) {
+      if (!alive.has(id)) {
+        state.favorites.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) saveFavorites();
+  }
+
+  function isNarrow() {
+    return NARROW_MQ.matches;
+  }
+
+  function placeFilterForm() {
+    if (!els.filterForm || !els.filterSheetBody) return;
+    if (els.filterForm.parentElement !== els.filterSheetBody) {
+      els.filterSheetBody.appendChild(els.filterForm);
+    }
+  }
+
+  function countActiveFilters() {
+    let count = 0;
+    for (const select of els.filterForm.querySelectorAll("select[name]")) {
+      if (select.value) count += 1;
+    }
+    return count;
+  }
+
+  function updateFiltersBadge() {
+    if (!els.filtersBadge || !els.filtersToggleBtn) return;
+    const count = countActiveFilters();
+    if (count > 0) {
+      els.filtersBadge.hidden = false;
+      els.filtersBadge.textContent = String(count);
+      els.filtersToggleBtn.textContent = "Filters ";
+      els.filtersToggleBtn.appendChild(els.filtersBadge);
+    } else {
+      els.filtersBadge.hidden = true;
+      els.filtersToggleBtn.textContent = "Filters";
+      els.filtersToggleBtn.appendChild(els.filtersBadge);
+    }
+  }
+
+  function closeFilterSheet() {
+    document.body.classList.remove("filter-sheet-open");
+    if (els.filterSheetPanel) els.filterSheetPanel.hidden = true;
+    if (
+      els.sheetBackdrop &&
+      !document.body.classList.contains("channels-open") &&
+      !document.body.classList.contains("share-dialog-open")
+    ) {
+      els.sheetBackdrop.hidden = true;
+    }
+    if (els.filtersToggleBtn) els.filtersToggleBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function closeShareDialog() {
+    document.body.classList.remove("share-dialog-open");
+    if (els.shareDialog) els.shareDialog.hidden = true;
+    if (
+      els.sheetBackdrop &&
+      !document.body.classList.contains("channels-open") &&
+      !document.body.classList.contains("filter-sheet-open")
+    ) {
+      els.sheetBackdrop.hidden = true;
+    }
+    if (els.shareBtn) els.shareBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function openShareDialog() {
+    closeFilterSheet();
+    if (els.shareDialog) els.shareDialog.hidden = false;
+    if (els.sheetBackdrop) els.sheetBackdrop.hidden = false;
+    document.body.classList.add("share-dialog-open");
+    if (els.shareBtn) els.shareBtn.setAttribute("aria-expanded", "true");
+  }
+
+  function toggleShareDialog() {
+    if (document.body.classList.contains("share-dialog-open")) closeShareDialog();
+    else openShareDialog();
+  }
+
+  function openFilterSheet() {
+    placeFilterForm();
+    closeShareDialog();
+    if (isNarrow()) setChannelsOpen(false);
+    document.body.classList.add("filter-sheet-open");
+    if (els.filterSheetPanel) els.filterSheetPanel.hidden = false;
+    if (els.sheetBackdrop) els.sheetBackdrop.hidden = false;
+    if (els.filtersToggleBtn) els.filtersToggleBtn.setAttribute("aria-expanded", "true");
+  }
+
+  function toggleFilterSheet() {
+    if (document.body.classList.contains("filter-sheet-open")) closeFilterSheet();
+    else openFilterSheet();
+  }
+
+  function setChannelsOpen(open) {
+    if (!isNarrow()) {
+      document.body.classList.remove("channels-open");
+      if (els.channelsToggleBtn) els.channelsToggleBtn.setAttribute("aria-expanded", "false");
+      if (
+        els.sheetBackdrop &&
+        !document.body.classList.contains("filter-sheet-open") &&
+        !document.body.classList.contains("share-dialog-open")
+      ) {
+        els.sheetBackdrop.hidden = true;
+      }
+      return;
+    }
+    document.body.classList.toggle("channels-open", Boolean(open));
+    if (els.channelsToggleBtn) {
+      els.channelsToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    if (open) {
+      closeFilterSheet();
+      closeShareDialog();
+      // Backdrop only when the drawer is a temporary overlay over watch-first.
+      if (state.watchFirst && els.sheetBackdrop) els.sheetBackdrop.hidden = false;
+    } else if (
+      els.sheetBackdrop &&
+      !document.body.classList.contains("filter-sheet-open") &&
+      !document.body.classList.contains("share-dialog-open")
+    ) {
+      els.sheetBackdrop.hidden = true;
+    }
+  }
+
+  function syncTheaterChrome() {
+    state.theater = state.watchFirst;
+    if (els.layout) els.layout.classList.toggle("theater", state.watchFirst && !isNarrow());
+    document.body.classList.toggle("theater-mode", state.watchFirst && !isNarrow());
+    if (els.theaterBtn) {
+      els.theaterBtn.textContent = state.watchFirst ? "Exit theater" : "Theater";
+    }
+    if (els.browseToggleBtn) {
+      els.browseToggleBtn.textContent = state.watchFirst ? "Show channels" : "Hide channels";
+    }
+  }
+
+  function enterWatchFirst() {
+    state.watchFirst = true;
+    document.body.classList.add("watch-first");
+    if (isNarrow()) setChannelsOpen(false);
+    else document.body.classList.remove("channels-open");
+    closeFilterSheet();
+    closeShareDialog();
+    syncTheaterChrome();
+    if (els.nowPlaying) els.nowPlaying.classList.remove("controls-open");
+    if (els.moreControlsBtn) els.moreControlsBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function exitWatchFirst() {
+    state.watchFirst = false;
+    document.body.classList.remove("watch-first");
+    syncTheaterChrome();
+    if (isNarrow()) setChannelsOpen(true);
+  }
+
+  function syncUiMode() {
+    document.body.classList.add("ui-chrome-compact");
+    const narrow = isNarrow();
+    document.body.classList.toggle("is-narrow", narrow);
+    document.body.classList.remove("is-compact");
+    placeFilterForm();
+
+    if (!narrow) {
+      document.body.classList.remove("channels-open");
+      if (els.channelsToggleBtn) els.channelsToggleBtn.setAttribute("aria-expanded", "false");
+    }
+
+    if (state.watchFirst) {
+      enterWatchFirst();
+    } else {
+      syncTheaterChrome();
+      if (narrow) setChannelsOpen(true);
+    }
+    updateFiltersBadge();
   }
 
   function setupSidebarResize() {
@@ -190,7 +539,7 @@
     };
 
     splitter.addEventListener("pointerdown", (event) => {
-      if (state.theater || window.matchMedia("(max-width: 960px)").matches) return;
+      if (state.watchFirst || isNarrow()) return;
       event.preventDefault();
       dragging = true;
       els.layout.classList.add("is-resizing");
@@ -284,6 +633,9 @@
     const q = els.searchInput.value.trim();
     if (q) params.set("q", q);
     if (state.source) params.set("source", state.source);
+    if (state.favoritesOnly && state.favorites.size) {
+      params.set("ids", [...state.favorites].join(","));
+    }
     return params;
   }
 
@@ -683,8 +1035,8 @@
   }
 
   function highlightActive() {
-    for (const button of els.streamList.querySelectorAll(".stream-item")) {
-      button.classList.toggle("active", Number(button.dataset.id) === state.selectedId);
+    for (const row of els.streamList.querySelectorAll(".stream-item")) {
+      row.classList.toggle("active", Number(row.dataset.id) === state.selectedId);
     }
   }
 
@@ -694,10 +1046,13 @@
 
     for (const item of items) {
       const li = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "stream-item";
-      button.dataset.id = String(item.id);
+      const row = document.createElement("div");
+      row.className = "stream-item";
+      row.dataset.id = String(item.id);
+
+      const selectBtn = document.createElement("button");
+      selectBtn.type = "button";
+      selectBtn.className = "stream-select";
 
       if (item.tvg_logo) {
         const img = document.createElement("img");
@@ -707,9 +1062,9 @@
         img.onerror = () => {
           img.replaceWith(fallbackLogo(item.name));
         };
-        button.appendChild(img);
+        selectBtn.appendChild(img);
       } else {
-        button.appendChild(fallbackLogo(item.name));
+        selectBtn.appendChild(fallbackLogo(item.name));
       }
 
       const meta = document.createElement("div");
@@ -735,10 +1090,22 @@
       nowLine.title = "Loading programme guide…";
 
       meta.append(titleRow, subtitle, nowLine);
-      button.appendChild(meta);
+      selectBtn.appendChild(meta);
+      selectBtn.addEventListener("click", () => selectStream(item.id));
 
-      button.addEventListener("click", () => selectStream(item.id));
-      li.appendChild(button);
+      const favBtn = document.createElement("button");
+      favBtn.type = "button";
+      favBtn.className = "favorite-btn";
+      favBtn.dataset.id = String(item.id);
+      syncFavoriteButton(favBtn, item.id);
+      favBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleFavorite(item.id);
+      });
+
+      row.append(selectBtn, favBtn);
+      li.appendChild(row);
       fragment.appendChild(li);
     }
 
@@ -795,14 +1162,24 @@
   function resetFilters() {
     els.searchInput.value = "";
     els.filterForm.reset();
+    const existing = readPrefs();
     clearCookie(PREFS_COOKIE);
-    // Keep CSV source and sidebar width after reset.
+    // Keep source, sidebar width, and Favorites filter. Starred channels live in
+    // localStorage and are only removed by tapping a channel's favorite button.
     const kept = {};
     if (state.source) kept.source = state.source;
     if (state.sidebarWidth && state.sidebarWidth !== SIDEBAR_DEFAULT) {
       kept.sidebarWidth = state.sidebarWidth;
     }
+    if (state.favoritesOnly) kept.favoritesOnly = true;
+    if (
+      typeof existing.dismissedUpdateVersion === "string" &&
+      existing.dismissedUpdateVersion
+    ) {
+      kept.dismissedUpdateVersion = existing.dismissedUpdateVersion;
+    }
     if (Object.keys(kept).length) writePrefs(kept);
+    updateFiltersBadge();
     loadStreams({ reset: true });
   }
 
@@ -828,6 +1205,21 @@
   async function loadStreams({ reset = false } = {}) {
     if (state.loading) return;
     if (!reset && state.items.length >= state.total && state.total > 0) return;
+
+    if (reset && state.favoritesOnly && state.favorites.size === 0) {
+      state.offset = 0;
+      state.items = [];
+      state.total = 0;
+      if (els.streamListWrap) els.streamListWrap.scrollTop = 0;
+      renderStreams([], false);
+      if (els.listSentinel) els.listSentinel.hidden = true;
+      if (state.playback === "idle") {
+        state.statusMessage = "No favorites yet — mark channels in the list";
+        state.statusIsError = false;
+      }
+      updateStatusBar();
+      return;
+    }
 
     state.loading = true;
     if (reset) {
@@ -860,6 +1252,7 @@
       if (els.listSentinel) {
         els.listSentinel.hidden = state.items.length >= data.total;
       }
+      maybePruneFavorites();
       if (state.playback === "idle") {
         state.statusMessage = `${data.total.toLocaleString()} match${data.total === 1 ? "" : "es"} · ${state.items.length.toLocaleString()} listed`;
         state.statusIsError = false;
@@ -910,10 +1303,8 @@
   }
 
   function toggleTheater() {
-    state.theater = !state.theater;
-    els.layout.classList.toggle("theater", state.theater);
-    document.body.classList.toggle("theater-mode", state.theater);
-    els.theaterBtn.textContent = state.theater ? "Exit theater" : "Theater";
+    if (state.watchFirst) exitWatchFirst();
+    else enterWatchFirst();
   }
 
   async function toggleFullscreen() {
@@ -938,13 +1329,68 @@
     }, 220);
   });
 
+  els.searchInput.addEventListener("focus", () => {
+    if (state.watchFirst) exitWatchFirst();
+  });
+
   els.filterForm.addEventListener("change", () => {
     savePrefs();
+    updateFiltersBadge();
     loadStreams({ reset: true });
   });
   els.resetFiltersBtn?.addEventListener("click", resetFilters);
+  els.resetFiltersBtnCompact?.addEventListener("click", () => {
+    resetFilters();
+    updateFiltersBadge();
+  });
   els.theaterBtn.addEventListener("click", toggleTheater);
   els.fullscreenBtn.addEventListener("click", toggleFullscreen);
+
+  els.filtersToggleBtn?.addEventListener("click", () => {
+    if (state.watchFirst) exitWatchFirst();
+    toggleFilterSheet();
+  });
+  els.favoritesToggleBtn?.addEventListener("click", () => {
+    if (state.watchFirst) exitWatchFirst();
+    state.favoritesOnly = !state.favoritesOnly;
+    syncFavoritesToggle();
+    savePrefs();
+    loadStreams({ reset: true });
+  });
+  els.favoritesHintDismiss?.addEventListener("click", () => {
+    hideFavoritesHint({ persist: true });
+  });
+  els.filterSheetDoneBtn?.addEventListener("click", closeFilterSheet);
+  els.shareBtn?.addEventListener("click", toggleShareDialog);
+  els.shareDialogCloseBtn?.addEventListener("click", closeShareDialog);
+  els.channelsToggleBtn?.addEventListener("click", () => {
+    if (!isNarrow()) return;
+    const open = !document.body.classList.contains("channels-open");
+    setChannelsOpen(open);
+  });
+  els.browseToggleBtn?.addEventListener("click", () => {
+    toggleTheater();
+  });
+  els.showSidebarBtn?.addEventListener("click", () => {
+    exitWatchFirst();
+  });
+  els.moreControlsBtn?.addEventListener("click", () => {
+    if (!els.nowPlaying) return;
+    const open = !els.nowPlaying.classList.contains("controls-open");
+    els.nowPlaying.classList.toggle("controls-open", open);
+    els.moreControlsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  els.statusDetailsBtn?.addEventListener("click", () => {
+    const open = !document.body.classList.contains("status-details-open");
+    document.body.classList.toggle("status-details-open", open);
+    els.statusDetailsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    els.statusDetailsBtn.textContent = open ? "Less" : "Details";
+  });
+  els.sheetBackdrop?.addEventListener("click", () => {
+    closeFilterSheet();
+    closeShareDialog();
+    if (state.watchFirst) setChannelsOpen(false);
+  });
 
   els.video.addEventListener("waiting", () => {
     if (state.selectedId == null || state.playback === "error") return;
@@ -982,17 +1428,96 @@
     if (event.key === "f" && !event.metaKey && !event.ctrlKey && event.target.tagName !== "INPUT") {
       toggleFullscreen();
     }
+    if (event.key === "Escape") {
+      closeFilterSheet();
+      closeShareDialog();
+      if (isNarrow() && state.watchFirst) setChannelsOpen(false);
+    }
   });
+
+  NARROW_MQ.addEventListener?.("change", syncUiMode);
+  window.addEventListener("resize", () => {
+    syncUiMode();
+  });
+
+  function hideUpdateNotice() {
+    if (els.updateAvailable) els.updateAvailable.hidden = true;
+  }
+
+  function linkStatusVersion(releaseUrl) {
+    const valueEl = els.statusVersionValue;
+    if (!valueEl || !releaseUrl) return;
+    if (valueEl.tagName === "A") {
+      valueEl.href = releaseUrl;
+      return;
+    }
+    const link = document.createElement("a");
+    link.id = "statusVersionValue";
+    link.className = "status-version-link";
+    link.href = releaseUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = "Newer version available — open release page";
+    link.textContent = valueEl.textContent;
+    valueEl.replaceWith(link);
+    els.statusVersionValue = link;
+  }
+
+  function showUpdateNotice(latest, releaseUrl) {
+    if (!els.updateAvailable || !els.updateAvailableLink || !releaseUrl) return;
+    els.updateAvailable.dataset.latest = latest;
+    els.updateAvailableLink.href = releaseUrl;
+    els.updateAvailableLink.title = `Version ${latest} is available`;
+    els.updateAvailable.hidden = false;
+    linkStatusVersion(releaseUrl);
+  }
+
+  function dismissUpdateNotice(latest) {
+    const prefs = collectPrefs();
+    prefs.dismissedUpdateVersion = latest;
+    writePrefs(prefs);
+    hideUpdateNotice();
+  }
+
+  async function checkForUpdate() {
+    try {
+      const response = await fetch("/api/update");
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data || !data.update_available || !data.latest || !data.release_url) {
+        return;
+      }
+      const prefs = readPrefs();
+      if (prefs.dismissedUpdateVersion === data.latest) return;
+      showUpdateNotice(data.latest, data.release_url);
+    } catch {
+      // Fail-soft: offline / API errors never interrupt browsing.
+    }
+  }
+
+  if (els.updateAvailableDismiss) {
+    els.updateAvailableDismiss.addEventListener("click", () => {
+      const version = els.updateAvailable?.dataset?.latest;
+      if (version) dismissUpdateNotice(version);
+      else hideUpdateNotice();
+    });
+  }
 
   (async () => {
     try {
+      state.favorites = loadFavorites();
       setupInfiniteScroll();
       setupSidebarResize();
+      syncUiMode();
       updateStatusBar();
       const prefs = readPrefs();
       await loadMeta(prefs.source || null);
       applyPrefs(prefs);
+      updateFiltersBadge();
+      syncFavoritesToggle();
+      syncUiMode();
       await loadStreams({ reset: true });
+      checkForUpdate();
     } catch (error) {
       state.statusMessage = "No catalog data available";
       state.statusIsError = true;
