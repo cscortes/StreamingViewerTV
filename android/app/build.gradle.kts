@@ -4,6 +4,23 @@ plugins {
     id("com.chaquo.python")
 }
 
+// Same source of truth as desktop / the Release workflow plan job.
+fun readAppVersion(): Pair<String, Int> {
+    val versionFile = rootProject.file("../stream_viewer/_version.py")
+    val match = Regex("""__version__\s*=\s*"([^"]+)"""")
+        .find(versionFile.readText())
+        ?: error("Could not parse __version__ from ${versionFile.path}")
+    val versionName = match.groupValues[1]
+    val parts = versionName.split(".").map { it.toInt() }
+    require(parts.size == 3) {
+        "Expected semver major.minor.patch in _version.py, got: $versionName"
+    }
+    val versionCode = parts[0] * 10000 + parts[1] * 100 + parts[2]
+    return versionName to versionCode
+}
+
+val (appVersionName, appVersionCode) = readAppVersion()
+
 android {
     namespace = "com.streamingviewertv.app"
     compileSdk = 35
@@ -12,8 +29,8 @@ android {
         applicationId = "com.streamingviewertv.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.3.6"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         ndk {
             // Real devices + current emulators. Drop x86_64 later to shrink APK if needed.

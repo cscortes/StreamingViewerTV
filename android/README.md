@@ -51,25 +51,16 @@ make bundle-android
 
 On first launch the Service copies the asset to `$HOME/iptv_export/viewer.db` (app internal storage). Delete the app data to force a re-copy after updating the asset.
 
-## GitHub Actions (release tags)
+## GitHub Actions (unified release)
 
-Workflow: [`.github/workflows/android.yml`](../.github/workflows/android.yml)
+Android ships in the same [release workflow](../.github/workflows/release.yml) as the desktop
+bundles. Bump `stream_viewer/_version.py` and push to `main` (or push a matching `vX.Y.Z`
+tag) — see [Versioning in DevReadme.md](../DevReadme.md#versioning).
 
-- **Runs on:** pushes of tags matching `v*` (e.g. `v0.3.7`), and manual **workflow_dispatch**
-- **Does not run** on every PR/`main` push (catalog + APK build is heavy; see `ci.yml` for tests)
-- **Produces:** debug APK `StreamingViewerTV-android-debug.apk`
-  - uploaded as a workflow artifact
-  - attached to the GitHub Release when the run is a tag push
-- Job steps: JDK 17, Python 3.10, Android SDK 35, `make build`, `make bundle-android`
-
-Create a release APK by tagging:
-
-```bash
-git tag v0.3.7
-git push origin v0.3.7
-```
-
-Or run **Actions → Android APK → Run workflow**.
+- **Shares** the probed `viewer.db` from `build-catalog` (same catalog as Win/Linux/macOS)
+- **Produces:** `StreamingViewerTV-<tag>-android-debug.apk`, attached with the other release assets
+- **`versionName` / `versionCode`** come from `_version.py` (no separate Gradle pin)
+- Local builds still use `make build` / `make build-probed` + `make bundle-android` as above
 
 ## Project layout
 

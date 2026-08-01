@@ -5,12 +5,13 @@ thousands of live channels by name, country, language, or category, and watch in
 in your browser.
 
 - **Thousands of free live channels**, ready to browse out of the box
-- **Fast search & filters** — country, language, category, video quality, and more
-- **What's on now** — live programme guide info right in the sidebar
+- **Fast search & filters**: country, language, category, video quality, and more
+- **What's on now**: live programme guide info right in the sidebar, some channels only
 - **Theater and fullscreen modes** for distraction-free viewing
-- **Works offline** — the app ships with its own channel catalog, no account or login needed
+- **Works offline**: ships with its own channel catalog, no account or login needed
+- **Multiple OS Compatibility:** Windows, Linux, macOS, Android.
 
-![StreamingViewerTV — search, filters, channel list, and player](screenshot.png)
+StreamingViewerTV — search, filters, channel list, and player
 
 ## Download & run
 
@@ -22,12 +23,16 @@ Grab the latest executable from the **[Releases page](../../releases/latest)**.
 2. Open the extracted folder and double-click `StreamingViewerTV.exe`.
 3. A browser tab opens automatically — you're ready to watch.
 
+
+
 ### Linux
 
 1. Download `StreamingViewerTV-<version>-linux-x86_64.tar.gz`.
 2. Extract it: `tar xzf StreamingViewerTV-*.tar.gz`
 3. Run it: `./StreamingViewerTV/StreamingViewerTV`
 4. A browser tab opens automatically — you're ready to watch.
+
+
 
 ### macOS (Apple Silicon)
 
@@ -40,17 +45,34 @@ This build is for Apple Silicon Macs (M1/M2/M3/…). There is no prebuilt Intel 
 archive — on an Intel Mac, build the desktop bundle from source (see
 [Packaging in DevReadme.md](DevReadme.md#packaging-desktop-bundles)).
 
+### Android (phone / tablet)
+
+1. Download `StreamingViewerTV-<version>-android-debug.apk` from the [Releases page](../../releases).
+2. On your device, allow installing apps from your browser or file manager
+   (**Install unknown apps** / similar) if prompted.
+3. Open the APK and install it.
+4. Launch **StreamingViewerTV**. A local viewer starts on the device and opens in
+   an in-app browser view — no PC required.
+
+The Android build is a debug/sideload APK (not from the Play Store). Phones and
+tablets with recent Android versions (64-bit, arm64) are supported. The UI uses
+compact chrome on all platforms (see Using the app).
+
+To rebuild the APK from source, see [android/README.md](android/README.md).
+
 The catalog bundled with each release is a snapshot as of that release's build date.
 Grab a newer release from the [Releases page](../../releases) for fresher channel data.
 
 ## Using the app
 
-- **Search** the box at the top of the sidebar to filter by channel name or metadata.
-- **Filters** (category, country, language, quality, etc.) live above the channel list.
-- Click any channel to start watching.
-- Press **T** to toggle **Theater mode** (hides the sidebar, enlarges the player).
+- **Search** in the slim toolbar to filter by channel name or metadata.
+- **Filters** (category, country, language, quality, etc.) open from the **Filters** button (not a permanent row of dropdowns).
+- On wide desktop, the channel list stays in a **docked, resizable sidebar** while browsing. On phones/tablets (narrow viewports), use **Channels** to open the list as an overlay drawer.
+- Click any channel to start watching. The channel list stays open until you collapse it with **Hide channels**, **Theater** (⋯ menu), or **T**. Use **Show channels** (toolbar or the left-edge tab) or **T** again to bring the list back.
 - Press **F** to toggle **Fullscreen**.
-- The status bar at the bottom shows channel counts and playback status.
+- The status bar at the bottom shows essentials; tap **Details** for the full stats.
+
+
 
 ## Troubleshooting
 
@@ -93,6 +115,17 @@ This can happen with any unsigned executable. The source code is fully open in t
 repository if you'd like to inspect it, or you can build it yourself — see
 [DevReadme.md](DevReadme.md).
 
+**Android blocks the install (“unknown apps” / Play Protect)**
+The APK isn’t from the Play Store. In the install prompt, allow your browser or
+file manager to install unknown apps, or temporarily allow the install in
+**Settings → Security**. If Play Protect warns, choose **Install anyway** (you can
+inspect the source in this repository).
+
+**Android app opens but no channels / blank UI**
+Wait a few seconds on first launch while the local viewer starts. If it stays
+blank, force-stop the app and reopen it, or reinstall a newer APK from
+[Releases](../../releases).
+
 ## Reporting problems
 
 Found a bug, or a channel category that seems off? Please
@@ -100,7 +133,9 @@ Found a bug, or a channel category that seems off? Please
 
 - What you were doing when it happened
 - What you expected vs. what actually happened
-- Your OS (Windows/Linux/macOS) and the app version (shown in the status bar at the bottom of the app)
+- Your OS (Windows/Linux/macOS/Android) and the app version (shown in the status bar at the bottom of the app)
+
+
 
 ## For developers
 

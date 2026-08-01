@@ -235,16 +235,18 @@ tab should open at [http://127.0.0.1:8787](http://127.0.0.1:8787).
 | Windows x64 | `windows-latest` | `StreamingViewerTV-<tag>-windows-x64.zip` |
 | Linux x86_64 | `ubuntu-latest` | `StreamingViewerTV-<tag>-linux-x86_64.tar.gz` |
 | macOS Apple Silicon | `macos-latest` | `StreamingViewerTV-<tag>-macos-arm64.tar.gz` |
+| Android (debug APK) | `ubuntu-latest` | `StreamingViewerTV-<tag>-android-debug.apk` |
 
 The prebuilt macOS release is **arm64 only**. On an Intel Mac, build the bundle
-locally with the steps above (same spec). Bundles are unsigned — expect SmartScreen
+locally with the steps above (same spec). Desktop bundles are unsigned — expect SmartScreen
 (Windows) or Gatekeeper (macOS) warnings; see [README.md](README.md) troubleshooting.
+For local Android builds, see [android/README.md](android/README.md).
 
 ## Versioning
 
 The running version is shown in the viewer's status bar. `stream_viewer/_version.py` is the
-single source of truth — `pyproject.toml` reads its version from that file, so there's only
-one place to edit:
+single source of truth — `pyproject.toml` and the Android Gradle `versionName`/`versionCode`
+read from that file, so there's only one place to edit:
 
 ```python
 __version__ = "0.1.0"
@@ -258,6 +260,20 @@ Bump it with each change, per [semver](https://semver.org/):
 Releases are automatic — just bump `_version.py` and merge/push to `main`. No manual tagging
 step needed. The [release workflow](.github/workflows/release.yml) runs this pipeline:
 
+```mermaid
+flowchart LR
+  plan --> test
+  test --> catalog[build-catalog]
+  catalog --> win[build-windows]
+  catalog --> linux[build-linux]
+  catalog --> mac[build-macos]
+  catalog --> android[build-android]
+  win --> publish[publish-release]
+  linux --> publish
+  mac --> publish
+  android --> publish
+```
+
 1. **`plan`** reads `stream_viewer/_version.py` and checks whether a release for that version
    already exists.
    - Pushed to `main` and the version is unchanged (no new release needed): every other job
@@ -270,13 +286,14 @@ step needed. The [release workflow](.github/workflows/release.yml) runs this pip
 3. **`build-catalog`** builds a fresh `viewer.db`, including a full HLS probe of every
    stream (same as `make build-probed`) so releases ship with `stream_quality` grades,
    not just unprobed metadata.
-4. **`build-windows`**, **`build-linux`**, and **`build-macos`** package that catalog into
-   the three desktop bundles in parallel (see [Packaging](#packaging-desktop-bundles)
-   for artifact names and local builds).
+4. **`build-windows`**, **`build-linux`**, **`build-macos`**, and **`build-android`**
+   package that same catalog in parallel (see [Packaging](#packaging-desktop-bundles)
+   for desktop artifact names; Android is a debug APK — see
+   [android/README.md](android/README.md)).
 5. **`publish-release`** only runs once *all* platform bundles succeed — it creates the
    GitHub Release (and the underlying `vX.Y.Z` tag, which doesn't need to exist
-   beforehand) with all three archives attached. If any platform build fails, no
-   release is created.
+   beforehand) with the three desktop archives and the Android APK attached. If any
+   platform build fails, no release is created.
 
 Prefer to tag manually instead (e.g. for a hotfix off a non-`main` ref)? That still works:
 
