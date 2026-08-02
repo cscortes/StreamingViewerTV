@@ -354,10 +354,22 @@ def test_narrow_hide_channels_slides_sidebar_offscreen(ui_server: str, page: Pag
 
     expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
     expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
-    initial_x = page.evaluate(
-        "() => document.getElementById('sidebar').getBoundingClientRect().x"
+    # Phone browse uses an in-flow full-width list (layout padding may offset x slightly).
+    metrics = page.evaluate(
+        """() => {
+          const s = document.getElementById('sidebar');
+          const r = s.getBoundingClientRect();
+          return {
+            x: r.x,
+            width: r.width,
+            ratio: r.width / window.innerWidth,
+            inline: document.getElementById('layout').style.getPropertyValue('--sidebar-width'),
+          };
+        }"""
     )
-    assert initial_x == 0
+    assert metrics["x"] < 24
+    assert metrics["ratio"] >= 0.9
+    assert metrics["inline"] in ("", "100%")
 
     page.locator("#browseToggleBtn").click()
     expect(page.locator("#browseToggleBtn")).to_have_text("Show")
@@ -375,7 +387,7 @@ def test_narrow_hide_channels_slides_sidebar_offscreen(ui_server: str, page: Pag
     page.wait_for_function(
         """() => {
           const r = document.getElementById('sidebar').getBoundingClientRect();
-          return r.x === 0 && r.width > 100;
+          return r.x < 24 && r.width / window.innerWidth >= 0.9;
         }"""
     )
 
@@ -445,6 +457,37 @@ def test_phone_more_menu_holds_overflow_actions(ui_server: str, page: Page) -> N
     expect(page.locator("body")).not_to_have_class(re.compile(r"phone-more-open"))
 
 
+def test_phone_browse_channel_names_are_readable(ui_server: str, page: Page) -> None:
+    """Phone browse must not clamp the drawer to the desktop ~220px sidebar width."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"watch-first"))
+
+    info = page.evaluate(
+        """() => {
+          const item = document.querySelector('#streamList .stream-item .stream-title-row strong');
+          const meta = document.querySelector('#streamList .stream-item .stream-meta');
+          const sidebar = document.getElementById('sidebar');
+          const stage = document.getElementById('stage');
+          return {
+            title: item ? item.textContent : '',
+            metaWidth: meta ? meta.getBoundingClientRect().width : 0,
+            sidebarWidth: sidebar.getBoundingClientRect().width,
+            stageDisplay: stage ? getComputedStyle(stage).display : '',
+            inline: document.getElementById('layout').style.getPropertyValue('--sidebar-width').trim(),
+          };
+        }"""
+    )
+    assert info["stageDisplay"] == "none"
+    assert info["sidebarWidth"] >= 350
+    assert info["metaWidth"] >= 220
+    assert info["title"]
+    assert info["inline"] in ("", "100%")
+
+
 def test_tablet_keeps_inline_toolbar_actions(ui_server: str, page: Page) -> None:
     """Tablet narrow mode should not use the phone overflow menu."""
     page.set_viewport_size({"width": 820, "height": 1180})
@@ -458,3 +501,30 @@ def test_tablet_keeps_inline_toolbar_actions(ui_server: str, page: Page) -> None
     expect(page.locator("#favoritesToggleBtn")).to_be_visible()
     expect(page.locator("#fullscreenBtn")).to_be_visible()
     expect(page.locator("#browseToggleBtn")).to_have_text("Hide channels")
+
+
+def test_fullscreen_falls_back_to_css_immersive(ui_server: str, page: Page) -> None:
+    """When Fullscreen API rejects (typical Android WebView), use body.is-fullscreen."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    page.evaluate(
+        """() => {
+          const reject = () => Promise.reject(new Error('fullscreen blocked'));
+          Element.prototype.requestFullscreen = reject;
+          HTMLVideoElement.prototype.requestFullscreen = reject;
+          const video = document.getElementById('video');
+          if (video) video.webkitEnterFullscreen = undefined;
+        }"""
+    )
+
+    page.locator("#phoneMoreBtn").click()
+    page.locator("#fullscreenBtn").click()
+    expect(page.locator("body")).to_have_class(re.compile(r"is-fullscreen"))
+    expect(page.locator("#fullscreenBtn")).to_have_text("Exit fullscreen")
+
+    # Filter bar is hidden while immersive — toggle via the same keyboard shortcut.
+    page.keyboard.press("f")
+    expect(page.locator("body")).not_to_have_class(re.compile(r"is-fullscreen"))
+    expect(page.locator("#fullscreenBtn")).to_have_text("Fullscreen")

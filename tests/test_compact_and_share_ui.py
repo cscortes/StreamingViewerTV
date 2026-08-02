@@ -94,12 +94,44 @@ def test_phone_tier_overflow_menu_wired():
     assert "function placePhoneOverflowItems" in js
     assert "function openPhoneMoreMenu" in js
     assert "function closePhoneMoreMenu" in js
+    assert "function clearLayoutSidebarWidthVar" in js
     assert 'classList.toggle("is-phone"' in js or "is-phone" in js
+    assert "clearLayoutSidebarWidthVar" in js
 
     assert "body.is-phone" in css
     assert ".phone-more-panel" in css
     assert "body.is-phone.watch-first .player-frame" in css
+    assert "body.is-phone:not(.watch-first) .sidebar" in css
+    assert "body.is-phone:not(.watch-first) .stage" in css
     assert "min-height: 0" in css
+    assert "background: var(--ink-soft)" in css
+
+
+def test_fullscreen_fallback_wired():
+    """Android WebView needs custom-view chrome + JS CSS fallback for Fullscreen."""
+    js = APP_JS.read_text(encoding="utf-8")
+    main = (
+        ROOT
+        / "android"
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "com"
+        / "streamingviewertv"
+        / "app"
+        / "MainActivity.kt"
+    ).read_text(encoding="utf-8")
+
+    assert "function enterCssFullscreen" in js
+    assert "function requestDomFullscreen" in js
+    assert "function toggleFullscreen" in js
+    assert "webkitEnterFullscreen" in js
+    assert "dataset.cssFullscreen" in js
+
+    assert "onShowCustomView" in main
+    assert "onHideCustomView" in main
+    assert "enterImmersiveMode" in main
 
 
 def test_rise_in_animation_does_not_pin_sidebar_transform():

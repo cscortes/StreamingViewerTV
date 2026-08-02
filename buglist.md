@@ -34,6 +34,8 @@
 | BUG-022 | 2026-08-01 | Android/narrow “Hide channels” / “Show channels” does not move the sidebar (animation fill pins transform). | Fixed | 2026-08-01 |
 | BUG-023 | 2026-08-02 | Favorites stored as numeric stream ids remapped to wrong channels after catalog rebuild / filtering. | Fixed | 2026-08-02 |
 | FEAT-009 | 2026-08-02 | Phone-tier UI under narrow: More overflow menu, denser channel rows, single-column filters, safe-area padding. | Done | 2026-08-02 |
+| BUG-024 | 2026-08-02 | Phone channel drawer clamped to ~220px / translucent, so names were truncated and hard to read. | Fixed | 2026-08-02 |
+| BUG-025 | 2026-08-02 | Fullscreen button does nothing on Android phone (WebView Fullscreen API). | Fixed | 2026-08-02 |
 
 ## Details
 
@@ -738,3 +740,51 @@ Canonical tests: `tests/test_favorites.py`,
 Canonical tests: `tests/test_compact_and_share_ui.py::test_phone_tier_overflow_menu_wired`,
 `tests/test_ui_filters_playwright.py::test_phone_more_menu_holds_overflow_actions`,
 `tests/test_ui_filters_playwright.py::test_tablet_keeps_inline_toolbar_actions`.
+
+### BUG-024 — Phone channel drawer too narrow / unreadable
+
+- **Reported:** 2026-08-02
+- **Status:** Fixed
+- **Fixed:** 2026-08-02
+- **Symptom:** On Android phones the channel list was a thin translucent strip; names
+  truncated to a few characters (“1+…”) in portrait and landscape.
+- **Cause:** Desktop sidebar resize prefs wrote an inline `--sidebar-width` on
+  `.layout`. On a ~390px viewport `clampSidebarWidth` forced ~220px, overriding the
+  narrow CSS `min(360px, 86vw)`. Translucent `--panel` made rows worse over the player.
+- **Fix:** Clear inline `--sidebar-width` while `is-narrow`; phone browse uses a
+  full-width in-flow list (player hidden until Hide/watch-first); opaque
+  `var(--ink-soft)` drawer; landscape handsets included in `PHONE_MQ`.
+- **Ships in:** **1.1.1**
+
+#### AI instructions (regression workflow)
+
+1. On phone viewport, `#layout` has no clamped inline `--sidebar-width` of ~220px.
+2. Browse (not watch-first): sidebar width ≥ ~90% of viewport; `#stage` is `display: none`.
+3. Hide still slides the drawer off-screen; Show restores the full-width list.
+
+Canonical tests:
+`tests/test_ui_filters_playwright.py::test_phone_browse_channel_names_are_readable`,
+`tests/test_ui_filters_playwright.py::test_narrow_hide_channels_slides_sidebar_offscreen`,
+`tests/test_compact_and_share_ui.py::test_phone_tier_overflow_menu_wired`.
+
+### BUG-025 — Fullscreen no-op on Android phone
+
+- **Reported:** 2026-08-02
+- **Status:** Fixed
+- **Fixed:** 2026-08-02
+- **Symptom:** Toolbar / More → Fullscreen does nothing on the Android APK.
+- **Cause:** Default `WebChromeClient()` does not implement `onShowCustomView` /
+  `onHideCustomView`, so WebView rejects `requestFullscreen`. JS also ignored the
+  rejection (no CSS fallback).
+- **Fix:** Handle custom-view fullscreen in `MainActivity`; JS tries `<video>` then
+  player frame, and falls back to `body.is-fullscreen` immersive chrome.
+- **Ships in:** **1.1.1**
+
+#### AI instructions (regression workflow)
+
+1. `MainActivity` WebChromeClient overrides `onShowCustomView` / `onHideCustomView`.
+2. `toggleFullscreen` catches Fullscreen API failures and sets `is-fullscreen`.
+3. Contract: JS contains `enterCssFullscreen` / `requestDomFullscreen`; Kotlin has
+   `onShowCustomView`.
+
+Canonical tests: `tests/test_compact_and_share_ui.py::test_fullscreen_fallback_wired`.

@@ -93,8 +93,10 @@
   const NARROW_MQ = window.matchMedia(
     "(max-width: 1100px), ((pointer: coarse) and (max-width: 1400px))"
   );
-  /* Phone: overflow toolbar + denser list under the shared narrow drawer. */
-  const PHONE_MQ = window.matchMedia("(max-width: 600px)");
+  /* Phone: portrait, or landscape handset (short coarse viewport). */
+  const PHONE_MQ = window.matchMedia(
+    "(max-width: 600px), ((pointer: coarse) and (max-height: 500px) and (max-width: 960px))"
+  );
 
   let searchTimer = null;
 
@@ -157,10 +159,18 @@
     );
   }
 
+  function clearLayoutSidebarWidthVar() {
+    if (els.layout) els.layout.style.removeProperty("--sidebar-width");
+  }
+
   function setSidebarWidth(width, { persist = false } = {}) {
     const next = clampSidebarWidth(width);
     state.sidebarWidth = next;
-    if (els.layout) {
+    // Narrow/phone drawers use CSS width (86–100vw). An inline --sidebar-width from
+    // desktop resize prefs would otherwise clamp the overlay to ~220px on phones.
+    if (isNarrow()) {
+      clearLayoutSidebarWidthVar();
+    } else if (els.layout) {
       els.layout.style.setProperty("--sidebar-width", `${next}px`);
     }
     if (els.splitter) {
@@ -566,8 +576,11 @@
     placeFilterForm();
     placePhoneOverflowItems();
 
-    if (!narrow) {
+    if (narrow) {
+      clearLayoutSidebarWidthVar();
+    } else {
       document.body.classList.remove("channels-open");
+      setSidebarWidth(state.sidebarWidth || SIDEBAR_DEFAULT);
     }
     if (!phone) closePhoneMoreMenu();
 
@@ -586,7 +599,8 @@
 
     splitter.setAttribute("aria-valuemin", String(SIDEBAR_MIN));
     splitter.setAttribute("aria-valuemax", String(SIDEBAR_MAX));
-    setSidebarWidth(state.sidebarWidth || SIDEBAR_DEFAULT);
+    if (isNarrow()) clearLayoutSidebarWidthVar();
+    else setSidebarWidth(state.sidebarWidth || SIDEBAR_DEFAULT);
 
     let dragging = false;
 
@@ -1397,23 +1411,106 @@
     else enterWatchFirst();
   }
 
-  async function toggleFullscreen() {
-    const target = els.playerFrame;
-    if (!document.fullscreenElement) {
-      await target.requestFullscreen?.();
-    } else {
-      await document.exitFullscreen?.();
+  function isDomFullscreen() {
+    return Boolean(
+      document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.msFullscreenElement
+    );
+  }
+
+  function syncFullscreenUi() {
+    const active = isDomFullscreen() || document.body.classList.contains("is-fullscreen");
+    if (els.fullscreenBtn) {
+      els.fullscreenBtn.textContent = active ? "Exit fullscreen" : "Fullscreen";
     }
   }
 
-  document.addEventListener("fullscreenchange", () => {
-    document.body.classList.toggle("is-fullscreen", Boolean(document.fullscreenElement));
-    if (els.fullscreenBtn) {
-      els.fullscreenBtn.textContent = document.fullscreenElement
-        ? "Exit fullscreen"
-        : "Fullscreen";
+  function enterCssFullscreen() {
+    document.body.dataset.cssFullscreen = "1";
+    document.body.classList.add("is-fullscreen");
+    syncFullscreenUi();
+  }
+
+  function exitCssFullscreen() {
+    delete document.body.dataset.cssFullscreen;
+    document.body.classList.remove("is-fullscreen");
+    syncFullscreenUi();
+  }
+
+  async function exitDomFullscreen() {
+    const exit =
+      document.exitFullscreen ||
+      document.webkitExitFullscreen ||
+      document.msExitFullscreen;
+    if (exit) await exit.call(document);
+  }
+
+  async function requestDomFullscreen(target) {
+    if (!target) return false;
+    const req =
+      target.requestFullscreen ||
+      target.webkitRequestFullscreen ||
+      target.webkitRequestFullScreen ||
+      target.msRequestFullscreen;
+    if (!req) return false;
+    await req.call(target);
+    return true;
+  }
+
+  async function toggleFullscreen() {
+    // Android WebView often rejects Element.requestFullscreen unless WebChromeClient
+    // handles onShowCustomView. Prefer <video>, then player frame, then CSS immersive.
+    if (isDomFullscreen()) {
+      try {
+        await exitDomFullscreen();
+      } catch {
+        // ignore
+      }
+      exitCssFullscreen();
+      return;
     }
-  });
+    if (document.body.dataset.cssFullscreen === "1") {
+      exitCssFullscreen();
+      return;
+    }
+
+    const video = els.video;
+    const frame = els.playerFrame;
+    try {
+      if (video && typeof video.webkitEnterFullscreen === "function") {
+        video.webkitEnterFullscreen();
+        enterCssFullscreen();
+        return;
+      }
+      if (await requestDomFullscreen(video)) {
+        document.body.classList.add("is-fullscreen");
+        syncFullscreenUi();
+        return;
+      }
+      if (await requestDomFullscreen(frame)) {
+        document.body.classList.add("is-fullscreen");
+        syncFullscreenUi();
+        return;
+      }
+      enterCssFullscreen();
+    } catch {
+      enterCssFullscreen();
+    }
+  }
+
+  function onFullscreenChange() {
+    if (isDomFullscreen()) {
+      delete document.body.dataset.cssFullscreen;
+      document.body.classList.add("is-fullscreen");
+    } else if (document.body.dataset.cssFullscreen !== "1") {
+      document.body.classList.remove("is-fullscreen");
+    }
+    syncFullscreenUi();
+  }
+
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 
   els.searchInput.addEventListener("input", () => {
     clearTimeout(searchTimer);

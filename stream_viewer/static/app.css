@@ -1492,6 +1492,8 @@ body.is-narrow .sidebar {
   opacity: 1;
   pointer-events: none;
   overflow: hidden;
+  /* Solid panel — translucent --panel made truncated rows unreadable over the player. */
+  background: var(--ink-soft);
   transition: transform 280ms ease;
 }
 
@@ -1685,8 +1687,46 @@ body.is-phone .status-bar {
     max(0.4rem, env(safe-area-inset-bottom, 0px)) max(0.65rem, env(safe-area-inset-left, 0px));
 }
 
+/* Browse: full-width in-flow channel list (not a skinny overlay over the player). */
+body.is-phone:not(.watch-first) .layout {
+  display: flex;
+  flex-direction: column;
+  --sidebar-width: 100%;
+}
+
+body.is-phone:not(.watch-first) .sidebar {
+  position: relative;
+  inset: auto;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  transform: none;
+  border-radius: var(--radius);
+  background: var(--ink-soft);
+  pointer-events: auto;
+  z-index: 1;
+  box-shadow: none;
+}
+
+body.is-phone:not(.watch-first) .stage {
+  display: none;
+}
+
+/* Watch + temporary channel peek: near full-bleed opaque drawer */
 body.is-phone.watch-first .layout {
+  --sidebar-width: min(100vw, 100%);
   padding: 0 0.25rem 0.25rem;
+}
+
+body.is-phone.watch-first .sidebar {
+  width: var(--sidebar-width);
+  background: var(--ink-soft);
+  border-radius: 0;
 }
 
 body.is-phone.watch-first .player-shell {
