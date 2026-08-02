@@ -285,3 +285,36 @@ def test_status_details_toggle(ui_server: str, page: Page) -> None:
 
     details_btn.click()
     expect(details_btn).to_have_attribute("aria-expanded", "false")
+
+
+def test_narrow_hide_channels_slides_sidebar_offscreen(ui_server: str, page: Page) -> None:
+    """BUG-022: rise-in animation fill must not pin sidebar transform on narrow/Android."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
+    initial_x = page.evaluate(
+        "() => document.getElementById('sidebar').getBoundingClientRect().x"
+    )
+    assert initial_x == 0
+
+    page.locator("#browseToggleBtn").click()
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show channels")
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+
+    page.wait_for_function(
+        """() => {
+          const r = document.getElementById('sidebar').getBoundingClientRect();
+          return r.right <= 1;
+        }"""
+    )
+
+    page.locator("#browseToggleBtn").click()
+    expect(page.locator("#browseToggleBtn")).to_have_text("Hide channels")
+    page.wait_for_function(
+        """() => {
+          const r = document.getElementById('sidebar').getBoundingClientRect();
+          return r.x === 0 && r.width > 100;
+        }"""
+    )

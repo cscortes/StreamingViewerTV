@@ -31,6 +31,7 @@
 | FEAT-006 | 2026-08-01 | Check GitHub Releases for a newer app version and show a dismissible “Update available” notice in the toolbar. | Done | 2026-08-01 |
 | FEAT-007 | 2026-08-01 | Star channels as favorites (localStorage); Favorites filter; Reset clears search/filters only, not starred channels. | Done | 2026-08-01 |
 | FEAT-008 | 2026-08-01 | Share dialog with QR code linking to the GitHub Releases download page. | Done | 2026-08-01 |
+| BUG-022 | 2026-08-01 | Android/narrow “Hide channels” / “Show channels” does not move the sidebar (animation fill pins transform). | Fixed | 2026-08-01 |
 
 ## Details
 
@@ -649,3 +650,31 @@ Canonical tests: `tests/test_favorites.py`,
 
 Canonical tests: `tests/test_compact_and_share_ui.py::test_share_dialog_wiring_and_qr_asset`,
 `tests/test_ui_filters_playwright.py::test_share_dialog_opens_with_releases_qr`.
+
+### BUG-022 — Narrow/Android Hide channels leaves sidebar on screen
+
+- **Reported:** 2026-08-01
+- **Status:** Fixed
+- **Fixed:** 2026-08-01
+- **Symptom:** On Android (and other narrow/coarse-pointer layouts), **Hide channels** /
+  **Show channels** updates the button label but the channel drawer stays visible and
+  overlapping the player.
+- **Cause:** `.sidebar` used `animation: rise-in … both`. The keyframes end at
+  `transform: translateY(0)`, and `forwards` fill kept that value after the animation,
+  overriding the watch-first `translateX(-105%)` hide rule. Desktop hide still looked
+  OK because the grid collapsed the column; narrow hide is transform-only.
+- **Fix:** Use `backwards` fill (not `both`) for `rise-in`, and disable the entrance
+  animation on `.sidebar` while `body.watch-first` / `.layout.theater`.
+- **Ships in:** **0.5.1**
+
+#### AI instructions (regression workflow)
+
+1. Add/keep a Playwright test at a phone viewport that clicks **Hide channels** and
+   asserts the sidebar’s `getBoundingClientRect().right <= 1`, then show again.
+2. Keep the static CSS contract that `rise-in` is not `ease both`.
+3. Do not reintroduce `animation-fill-mode: forwards/both` on `.sidebar` while hide/show
+   relies on `transform`.
+
+Canonical tests:
+`tests/test_ui_filters_playwright.py::test_narrow_hide_channels_slides_sidebar_offscreen`,
+`tests/test_compact_and_share_ui.py::test_rise_in_animation_does_not_pin_sidebar_transform`.

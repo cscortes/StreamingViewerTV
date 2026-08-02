@@ -1044,7 +1044,8 @@ body.is-fullscreen .player-frame {
 .filter-bar,
 .sidebar,
 .player-shell {
-  animation: rise-in 420ms ease both;
+  /* backwards only: forwards fill would pin transform/opacity and block hide/show */
+  animation: rise-in 420ms ease backwards;
 }
 
 /* Keep filter controls fully visible — never leave them at opacity 0 from animation. */
@@ -1055,6 +1056,12 @@ body.is-fullscreen .player-frame {
 
 .sidebar {
   animation-delay: 40ms;
+}
+
+/* Entrance animation must not override watch-first / theater collapse transforms. */
+body.watch-first .sidebar,
+.layout.theater .sidebar {
+  animation: none;
 }
 
 .player-shell {

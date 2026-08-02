@@ -46,6 +46,15 @@ def test_narrow_breakpoint_driven_by_match_media():
     assert "NARROW_MQ.matches" in js
 
 
+def test_rise_in_animation_does_not_pin_sidebar_transform():
+    """BUG-022: forwards fill on rise-in kept translateY(0) and blocked hide/show."""
+    css = APP_CSS.read_text(encoding="utf-8")
+    assert "animation: rise-in 420ms ease backwards" in css
+    assert "animation: rise-in 420ms ease both" not in css
+    assert "body.watch-first .sidebar" in css
+    assert "animation: none" in css
+
+
 def test_share_dialog_wiring_and_qr_asset():
     html = INDEX_HTML.read_text(encoding="utf-8")
     js = APP_JS.read_text(encoding="utf-8")
