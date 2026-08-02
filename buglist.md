@@ -29,9 +29,11 @@
 | FEAT-004 | 2026-08-01 | Compact chrome UI: Filters sheet, docked/resizable channel sidebar (desktop) or overlay drawer (narrow), overflow view controls, and collapsible status Details. | Done | 2026-08-01 |
 | FEAT-005 | 2026-08-01 | Unify desktop and Android GitHub Actions releases: one probed catalog, parallel platform builds, single publish; Gradle version from `_version.py`. | Done | 2026-08-01 |
 | FEAT-006 | 2026-08-01 | Check GitHub Releases for a newer app version and show a dismissible “Update available” notice in the toolbar. | Done | 2026-08-01 |
-| FEAT-007 | 2026-08-01 | Star channels as favorites (localStorage); Favorites filter; Reset clears search/filters only, not starred channels. | Done | 2026-08-01 |
+| FEAT-007 | 2026-08-01 | Star channels as favorites (URL-hash localStorage); Favorites filter; Reset clears search/filters only, not starred channels. | Done | 2026-08-01 |
 | FEAT-008 | 2026-08-01 | Share dialog with QR code linking to the GitHub Releases download page. | Done | 2026-08-01 |
 | BUG-022 | 2026-08-01 | Android/narrow “Hide channels” / “Show channels” does not move the sidebar (animation fill pins transform). | Fixed | 2026-08-01 |
+| BUG-023 | 2026-08-02 | Favorites stored as numeric stream ids remapped to wrong channels after catalog rebuild / filtering. | Fixed | 2026-08-02 |
+| FEAT-009 | 2026-08-02 | Phone-tier UI under narrow: More overflow menu, denser channel rows, single-column filters, safe-area padding. | Done | 2026-08-02 |
 
 ## Details
 
@@ -528,12 +530,13 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
 - **Status:** Done
 - **Fixed:** 2026-08-01
 - **Notes:**
-  - Slim toolbar always on (`ui-chrome-compact`): search plus **Filters** / **Channels** /
-    **Hide channels** / **Reset** instead of a permanent filter row.
+  - Slim toolbar always on (`ui-chrome-compact`): **Reset** / **Filters** /
+    **Favorites** / **Hide channels** instead of a permanent filter row.
   - Filters open in a sheet/panel with an active-filter badge on the Filters button.
   - Wide desktop: channel list is a docked, resizable sidebar. Narrow / coarse-pointer
-    viewports: Channels opens an overlay drawer over a backdrop (better for phones).
-  - Theater / Fullscreen / Open URL live under a ⋯ overflow control.
+    viewports: Hide/Show opens an overlay drawer over a backdrop (better for phones).
+  - **Fullscreen** sits in the toolbar next to **Hide channels**; channel/programme
+    info overlays the bottom of the video. **Share** sits beside status **Details**.
   - Status bar shows essentials (Matches, Playback, message); **Details** expands the rest
     (catalog counts, guide, errors, version).
   - Ships in **0.5.0** with desktop bundles and the Android debug APK.
@@ -610,24 +613,28 @@ Canonical test: `tests/test_release_pipeline.py`.
 - **Status:** Done
 - **Fixed:** 2026-08-01
 - **Notes:**
-  - Each channel row has a star button; starred IDs persist in `localStorage`
-    (`svtv_favorites`, capped at 500).
-  - Toolbar **Favorites** toggles a favorites-only list via `/api/streams?ids=…`
-    (`parse_stream_id_filter` in `app.py`).
+  - Each channel row has a star button; starred identity is the full SHA-256 hex of the
+    stream URL (`streams.favorite_key`), persisted in `localStorage` as
+    `svtv_favorites_v2` (capped at **100**). Legacy `svtv_favorites` int IDs are wiped.
+  - Toolbar **Favorites** toggles a favorites-only list via
+    `/api/streams?favorite_keys=…` (paginated, catalog-only — no proxy).
   - **Reset** clears search and filter dropdowns only — it must not clear starred
     channels or turn off the Favorites filter. Stars are removed only by tapping the
     channel’s favorite button.
   - Hint under the toolbar explains favorites are device/browser-local.
+  - Identity fix for catalog rebuild remapping: see **BUG-023**.
 
 #### AI instructions (regression workflow)
 
-1. Assert index HTML has `#favoritesToggleBtn` and list rows render `.favorite-btn`.
+1. Assert index HTML has `#favoritesToggleBtn` and list rows render `.favorite-btn`
+   with `data-fav-key`.
 2. Assert `resetFilters()` does **not** set `state.favoritesOnly = false` or clear
-   `state.favorites` / `localStorage` `svtv_favorites`.
-3. Assert `/api/streams?ids=1,2` returns only those stream IDs (when present).
+   `state.favorites` / `localStorage` `svtv_favorites_v2`.
+3. Assert `/api/streams?favorite_keys=<64-hex>` returns only those streams.
+4. Assert Favorites listing does not open `/api/proxy` until a channel is selected.
 
 Canonical tests: `tests/test_favorites.py`,
-`tests/test_ui_filters_playwright.py::test_favorites_filter_and_reset_preserve_stars`.
+`tests/test_ui_filters_playwright.py` favorites cases (including proxy-quiet).
 
 ### FEAT-008 — Share QR to GitHub Releases
 
@@ -635,7 +642,7 @@ Canonical tests: `tests/test_favorites.py`,
 - **Status:** Done
 - **Fixed:** 2026-08-01
 - **Notes:**
-  - Toolbar **Share** opens a dialog with a static QR image
+  - Status-bar **Share** opens a dialog with a static QR image
     (`static/share-releases-qr.png`) encoding
     `https://github.com/cscortes/StreamingViewerTV/releases/latest`.
   - Dialog also shows a text link to the same releases page for non-camera use.
@@ -678,3 +685,56 @@ Canonical tests: `tests/test_compact_and_share_ui.py::test_share_dialog_wiring_a
 Canonical tests:
 `tests/test_ui_filters_playwright.py::test_narrow_hide_channels_slides_sidebar_offscreen`,
 `tests/test_compact_and_share_ui.py::test_rise_in_animation_does_not_pin_sidebar_transform`.
+
+### BUG-023 — Favorites remapped after catalog rebuild
+
+- **Reported:** 2026-08-02
+- **Status:** Fixed
+- **Fixed:** 2026-08-02
+- **Symptom:** Starred channels no longer match the intended streams after a new
+  `viewer.db` (playlist reorder, blocklist removals, or release rebuild).
+- **Cause:** Favorites in `localStorage` (`svtv_favorites`) were CSV-row / DB
+  primary-key integers, which are not stable channel identity.
+- **Fix:** Persist full SHA-256 of stream URL as `streams.favorite_key` at import;
+  Favorites use `svtv_favorites_v2` + `favorite_keys` API; clean-slate wipe of
+  legacy ints; cap 100; catalog-only listing (no proxy storm).
+- **Ships in:** **1.1.0**
+
+#### AI instructions (regression workflow)
+
+1. Unit/API: `favorite_key` is strip + full 64-hex; import stores matching keys and
+   index; `?favorite_keys=` filters/caps at 100; listing does not open proxy sessions.
+2. Playwright: star → hash in `svtv_favorites_v2`; survives reload; Favorites uses
+   `favorite_keys`; Reset preserves stars; legacy `svtv_favorites` wiped; Favorites
+   listing is proxy-quiet until a channel click.
+3. Id-shift: reorder CSV / rebuild DB — same URLs keep the same `favorite_key`.
+
+Canonical tests: `tests/test_favorites.py`,
+`tests/test_ui_filters_playwright.py` favorites cases.
+
+### FEAT-009 — Phone-tier compact chrome
+
+- **Reported:** 2026-08-02
+- **Status:** Done
+- **Fixed:** 2026-08-02
+- **Notes:**
+  - Phones (`max-width: 600px`) get `body.is-phone` on top of shared `is-narrow`.
+  - Toolbar keeps Search / Filters / Hide; Reset, Favorites, and Fullscreen move under
+    a **More** menu (`#phoneMoreBtn` / `#phoneMorePanel`).
+  - Denser channel rows, single-column filter sheet, flex player height, safe-area
+    insets on filter and status bars.
+  - Tablets keep the full inline narrow toolbar.
+  - Ships in **1.1.0**.
+
+#### AI instructions (regression workflow)
+
+1. Contract: `PHONE_MQ`, `placePhoneOverflowItems`, `body.is-phone`, `.phone-more-panel`
+   present in JS/CSS/HTML.
+2. Playwright @ 390×844: `is-phone`, overflow items parented under `#phoneMorePanel`,
+   More toggles `phone-more-open`; Hide/Show use short labels.
+3. Playwright @ tablet (e.g. 820×1180): `is-narrow` without `is-phone`; More hidden;
+   Reset/Favorites/Fullscreen stay inline.
+
+Canonical tests: `tests/test_compact_and_share_ui.py::test_phone_tier_overflow_menu_wired`,
+`tests/test_ui_filters_playwright.py::test_phone_more_menu_holds_overflow_actions`,
+`tests/test_ui_filters_playwright.py::test_tablet_keeps_inline_toolbar_actions`.

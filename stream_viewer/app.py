@@ -630,6 +630,7 @@ def public_stream(stream: dict[str, Any]) -> dict[str, Any]:
         "id": stream["id"],
         "name": stream.get("name", ""),
         "url": stream.get("url", ""),
+        "favorite_key": stream.get("favorite_key", ""),
         "tvg_id": stream.get("tvg_id", ""),
         "tvg_logo": stream.get("tvg_logo", ""),
         "group_title": stream.get("group_title", ""),
@@ -1124,6 +1125,8 @@ async def api_reload(source: str | None = None) -> dict[str, Any]:
 
 
 MAX_STREAM_ID_FILTER = 500
+MAX_FAVORITE_KEY_FILTER = 100
+FAVORITE_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def parse_stream_id_filter(request: Request) -> set[int] | None:
@@ -1145,6 +1148,22 @@ def parse_stream_id_filter(request: Request) -> set[int] | None:
     return id_set
 
 
+def parse_favorite_key_filter(request: Request) -> set[str] | None:
+    """Optional `favorite_keys` query: full SHA-256 hex strings. Caps at 100."""
+    if "favorite_keys" not in request.query_params:
+        return None
+    key_set: set[str] = set()
+    for value in request.query_params.getlist("favorite_keys"):
+        for part in str(value).replace(",", " ").split():
+            key = part.strip().lower()
+            if not FAVORITE_KEY_RE.fullmatch(key):
+                continue
+            key_set.add(key)
+            if len(key_set) >= MAX_FAVORITE_KEY_FILTER:
+                return key_set
+    return key_set
+
+
 @app.get("/api/streams")
 async def api_streams(
     request: Request,
@@ -1157,11 +1176,16 @@ async def api_streams(
     query = q.strip().lower()
     filters = parse_filter_params(request)
     id_set = parse_stream_id_filter(request)
+    favorite_keys = parse_favorite_key_filter(request)
     matched = [
         public_stream(stream)
         for stream in catalog["streams"]
         if matches_filters(stream, q=query, filters=filters)
         and (id_set is None or stream["id"] in id_set)
+        and (
+            favorite_keys is None
+            or (stream.get("favorite_key") or "") in favorite_keys
+        )
     ]
     page = matched[offset : offset + limit]
     return {

@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css?v=14" />
+  <link rel="stylesheet" href="/static/app.css?v=19" />
   <script src="/static/hls.min.js" defer></script>
-  <script src="/static/app.js?v=14" defer></script>
+  <script src="/static/app.js?v=18" defer></script>
 </head>
 <body class="ui-chrome-compact"{% if android %} data-platform="android"{% endif %}>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -41,31 +41,34 @@
           aria-label="Dismiss update notice"
         >&times;</button>
       </div>
+      <button type="button" class="ghost-btn reset-btn phone-overflow-item" id="resetFiltersBtnCompact">Reset</button>
       <button type="button" class="ghost-btn compact-btn" id="filtersToggleBtn" aria-expanded="false" aria-controls="filterForm">
         Filters
         <span class="filters-badge" id="filtersBadge" hidden>0</span>
       </button>
       <button
         type="button"
-        class="ghost-btn compact-btn"
+        class="ghost-btn compact-btn phone-overflow-item"
         id="favoritesToggleBtn"
         aria-pressed="false"
         title="Favorites are saved in this browser only and may be cleared by the OS or browser."
       >
         Favorites
       </button>
-      <button
-        type="button"
-        class="ghost-btn compact-btn"
-        id="shareBtn"
-        aria-expanded="false"
-        aria-controls="shareDialog"
-        title="Share download link"
-      >
-        Share
-      </button>
       <button type="button" class="solid-btn compact-btn" id="browseToggleBtn">Hide channels</button>
-      <button type="button" class="ghost-btn reset-btn" id="resetFiltersBtnCompact">Reset</button>
+      <button type="button" class="ghost-btn compact-btn phone-overflow-item" id="fullscreenBtn">Fullscreen</button>
+      <div class="phone-more-wrap" id="phoneMoreWrap">
+        <button
+          type="button"
+          class="ghost-btn compact-btn phone-more-btn"
+          id="phoneMoreBtn"
+          aria-label="More"
+          aria-haspopup="menu"
+          aria-expanded="false"
+          aria-controls="phoneMorePanel"
+        >More</button>
+        <div class="phone-more-panel" id="phoneMorePanel" role="menu" hidden></div>
+      </div>
     </div>
 
     <p class="favorites-hint" id="favoritesHint" hidden>
@@ -166,25 +169,22 @@
             <h1>Pick a stream</h1>
             <p>Filter by category, country, language, or quality — then select a channel to watch.</p>
           </div>
-        </div>
-
-        <div class="now-playing" id="nowPlaying" hidden>
-          <div class="now-meta">
-            <img id="nowLogo" alt="" hidden />
-            <div class="now-text">
-              <div class="now-title-row">
-                <h2 id="nowTitle">—</h2>
-                <span class="now-programme" id="nowProgramme" data-state="empty">No data</span>
-                <span class="quality-stars" id="nowStars" hidden aria-label=""></span>
+          <div class="now-playing" id="nowPlaying" hidden>
+            <div class="now-meta">
+              <img id="nowLogo" alt="" hidden />
+              <div class="now-text">
+                <div class="now-title-row">
+                  <h2 id="nowTitle">—</h2>
+                  <span class="now-programme" id="nowProgramme" hidden></span>
+                  <span class="now-quality" id="nowQuality" hidden></span>
+                  <span class="now-favorite-mark" id="nowFavorite" hidden title="Favorite" aria-label="Favorite">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12.1 21.35l-1.1-1C5.14 15.24 2 12.39 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.89-3.14 6.74-8.9 11.86l-1 0.99z"/></svg>
+                  </span>
+                  <span class="quality-stars" id="nowStars" hidden aria-label=""></span>
+                </div>
+                <p id="nowDetails">—</p>
               </div>
-              <p id="nowDetails">—</p>
             </div>
-          </div>
-          <button type="button" class="ghost-btn more-btn" id="moreControlsBtn" aria-expanded="false" aria-controls="viewControls" title="More controls">⋯</button>
-          <div class="view-controls" id="viewControls">
-            <button type="button" class="solid-btn" id="theaterBtn">Theater</button>
-            <button type="button" class="solid-btn" id="fullscreenBtn">Fullscreen</button>
-            <a class="ghost-btn" id="openRaw" href="#" target="_blank" rel="noopener">Open URL</a>
           </div>
         </div>
         <p class="player-status" id="playerStatus" hidden></p>
@@ -216,6 +216,16 @@
       </span>
       <span class="status-item status-extra"><span class="status-label">Errors</span> <strong id="statusErrors">0</strong></span>
     </div>
+    <button
+      type="button"
+      class="ghost-btn status-share-btn"
+      id="shareBtn"
+      aria-expanded="false"
+      aria-controls="shareDialog"
+      title="Share download link"
+    >
+      Share
+    </button>
     <button type="button" class="ghost-btn status-details-btn" id="statusDetailsBtn" aria-expanded="false" aria-controls="statusDetails">
       Details
     </button>

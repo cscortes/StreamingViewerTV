@@ -25,11 +25,19 @@ def test_viewer_pane_shows_programme_beside_stream_name():
     js = APP_JS.read_text(encoding="utf-8")
     assert 'id="nowProgramme"' in html
     assert 'id="nowTitle"' in html
+    assert 'id="nowQuality"' in html
+    assert 'id="nowFavorite"' in html
     assert "function setViewerProgramme" in js
     assert "els.nowProgramme" in js
-    # Programme title must be wired into the player header, not only the sidebar.
+    assert "function setNowQuality" in js
+    assert "function syncNowFavoriteMark" in js
+    # Programme title must be wired into the player overlay, not only the sidebar.
     assert "setViewerProgramme(hasNow ? stream.now_playing : null" in js
     assert "setViewerProgramme(info, { pending: false })" in js
+    # Overlay hides empty programme labels instead of showing "No data".
+    assert "node.hidden = true" in js[js.index("function setViewerProgramme") : js.index("function setStreamNowLine")]
+    assert 'node.textContent = "No data"' not in js
+    assert 'node.textContent = "Fetching…"' not in js[js.index("function setViewerProgramme") : js.index("function setStreamNowLine")]
 
 
 def test_no_duplicate_match_count_beside_reset():

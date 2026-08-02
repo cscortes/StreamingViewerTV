@@ -24,7 +24,11 @@ def test_compact_chrome_toolbar_wired():
     assert 'id="browseToggleBtn"' in html
     assert 'id="showSidebarBtn"' in html
     assert 'id="statusDetailsBtn"' in html
-    assert 'id="moreControlsBtn"' in html
+    assert 'id="fullscreenBtn"' in html
+    assert 'id="moreControlsBtn"' not in html
+    assert 'id="theaterBtn"' not in html
+    assert 'id="openRaw"' not in html
+    assert 'id="viewControls"' not in html
 
     assert "function openFilterSheet" in js
     assert "function closeFilterSheet" in js
@@ -33,11 +37,37 @@ def test_compact_chrome_toolbar_wired():
     assert "matchMedia" in js
     assert "status-details-open" in js or "statusDetailsBtn" in js
     assert "channelsToggleBtn" not in js
+    assert "moreControlsBtn" not in js
+    assert "theaterBtn" not in js
+    assert "openRaw" not in js
 
     assert "body.ui-chrome-compact" in css
     assert "filter-sheet-open" in css
     assert "channels-open" in css
     assert "#channelsToggleBtn" not in css
+    assert ".more-btn" not in css
+    assert ".view-controls" not in css
+
+
+def test_compact_actions_order_and_share_beside_details():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    compact = html[html.index('id="compactActions"') : html.index("favorites-hint")]
+    assert compact.index("resetFiltersBtnCompact") < compact.index("filtersToggleBtn")
+    assert compact.index("filtersToggleBtn") < compact.index("favoritesToggleBtn")
+    assert compact.index("favoritesToggleBtn") < compact.index("browseToggleBtn")
+    assert compact.index("browseToggleBtn") < compact.index("fullscreenBtn")
+    assert compact.index("fullscreenBtn") < compact.index("phoneMoreBtn")
+    assert "shareBtn" not in compact
+    assert 'id="fullscreenBtn"' in compact
+    assert 'id="phoneMoreBtn"' in compact
+    assert 'id="phoneMorePanel"' in compact
+
+    now = html[html.index('id="playerFrame"') : html.index('id="playerStatus"')]
+    assert 'id="nowPlaying"' in now
+    assert 'id="fullscreenBtn"' not in now
+
+    footer = html[html.index('id="statusBar"') :]
+    assert footer.index("shareBtn") < footer.index("statusDetailsBtn")
 
 
 def test_narrow_breakpoint_driven_by_match_media():
@@ -47,6 +77,29 @@ def test_narrow_breakpoint_driven_by_match_media():
     assert "matchMedia(" in js
     assert "function isNarrow" in js
     assert "NARROW_MQ.matches" in js
+
+
+def test_phone_tier_overflow_menu_wired():
+    """Phones get is-phone + More overflow; tablets stay on shared is-narrow chrome."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    js = APP_JS.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert 'id="phoneMoreBtn"' in html
+    assert 'id="phoneMorePanel"' in html
+    assert "phone-overflow-item" in html
+
+    assert "const PHONE_MQ" in js or "PHONE_MQ =" in js
+    assert "function isPhone" in js
+    assert "function placePhoneOverflowItems" in js
+    assert "function openPhoneMoreMenu" in js
+    assert "function closePhoneMoreMenu" in js
+    assert 'classList.toggle("is-phone"' in js or "is-phone" in js
+
+    assert "body.is-phone" in css
+    assert ".phone-more-panel" in css
+    assert "body.is-phone.watch-first .player-frame" in css
+    assert "min-height: 0" in css
 
 
 def test_rise_in_animation_does_not_pin_sidebar_transform():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 STREAM_COLUMNS = [
     "name",
     "url",
+    "favorite_key",
     "tvg_id",
     "tvg_logo",
     "group_title",
@@ -29,6 +31,11 @@ STREAM_COLUMNS = [
     "probe_latency_ms",
     "probe_notes",
 ]
+
+
+def favorite_key(url: str) -> str:
+    """Full SHA-256 hex of stripped URL — stable favorites identity."""
+    return hashlib.sha256(url.strip().encode("utf-8")).hexdigest()
 
 
 def connect(db_path: Path) -> sqlite3.Connection:

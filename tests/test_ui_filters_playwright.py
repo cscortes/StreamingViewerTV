@@ -217,7 +217,7 @@ def test_filter_change_jumps_stream_list_to_top(ui_server: str, page: Page) -> N
 
 
 def test_favorites_filter_and_reset_preserve_stars(ui_server: str, page: Page) -> None:
-    """FEAT-007: star a channel, Favorites narrows the list; Reset keeps stars."""
+    """FEAT-007 / BUG-023: star by URL hash; Favorites narrows; Reset keeps stars."""
     page.goto(ui_server, wait_until="networkidle")
     page.wait_for_selector("#streamList .stream-item")
 
@@ -227,9 +227,13 @@ def test_favorites_filter_and_reset_preserve_stars(ui_server: str, page: Page) -
     fav_btn.click()
     expect(fav_btn).to_have_attribute("aria-label", "Remove from favorites")
 
-    stored = page.evaluate("() => localStorage.getItem('svtv_favorites')")
+    stored = page.evaluate("() => localStorage.getItem('svtv_favorites_v2')")
     assert stored is not None
     assert stored != "[]"
+    keys = page.evaluate("() => JSON.parse(localStorage.getItem('svtv_favorites_v2'))")
+    assert isinstance(keys, list) and len(keys) == 1
+    assert re.fullmatch(r"[0-9a-f]{64}", keys[0])
+    expect(fav_btn).to_have_attribute("data-fav-key", keys[0])
 
     page.locator("#favoritesToggleBtn").click()
     expect(page.locator("#favoritesToggleBtn")).to_have_attribute("aria-pressed", "true")
@@ -246,11 +250,66 @@ def test_favorites_filter_and_reset_preserve_stars(ui_server: str, page: Page) -
     expect(page.locator("#filterSheetPanel")).to_be_hidden()
 
     page.locator("#resetFiltersBtnCompact").click()
-    # Reset clears category but keeps Favorites mode and starred IDs.
+    # Reset clears category but keeps Favorites mode and starred keys.
     expect(page.locator("#favoritesToggleBtn")).to_have_attribute("aria-pressed", "true")
     expect(page.locator("#streamList")).to_contain_text("Demo News")
     expect(page.locator("#streamList")).not_to_contain_text("Demo Movie")
-    assert page.evaluate("() => localStorage.getItem('svtv_favorites')") == stored
+    assert page.evaluate("() => localStorage.getItem('svtv_favorites_v2')") == stored
+
+
+def test_favorites_survive_reload_and_wipe_legacy_ints(ui_server: str, page: Page) -> None:
+    """BUG-023: hash favorites persist; legacy int svtv_favorites is cleared."""
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+    page.evaluate(
+        """() => {
+          localStorage.setItem('svtv_favorites', JSON.stringify([0, 1, 2]));
+        }"""
+    )
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+    assert page.evaluate("() => localStorage.getItem('svtv_favorites')") is None
+
+    page.locator("#streamList .stream-item").filter(has_text="Demo News").locator(
+        ".favorite-btn"
+    ).click()
+    stored = page.evaluate("() => localStorage.getItem('svtv_favorites_v2')")
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+    assert page.evaluate("() => localStorage.getItem('svtv_favorites_v2')") == stored
+    news_btn = page.locator("#streamList .stream-item").filter(
+        has_text="Demo News"
+    ).locator(".favorite-btn")
+    expect(news_btn).to_have_attribute("aria-label", "Remove from favorites")
+
+
+def test_favorites_listing_is_proxy_quiet_until_play(ui_server: str, page: Page) -> None:
+    """BUG-023: Favorites mode must not storm /api/proxy until a channel is clicked."""
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    proxy_hits: list[str] = []
+
+    def on_request(request) -> None:
+        if "/api/proxy" in request.url:
+            proxy_hits.append(request.url)
+
+    page.on("request", on_request)
+
+    for name in ("Demo News", "Demo Movie"):
+        page.locator("#streamList .stream-item").filter(has_text=name).locator(
+            ".favorite-btn"
+        ).click()
+
+    page.locator("#favoritesToggleBtn").click()
+    expect(page.locator("#favoritesToggleBtn")).to_have_attribute("aria-pressed", "true")
+    page.wait_for_selector("#streamList .stream-item")
+    expect(page.locator("#streamList .stream-item")).to_have_count(2)
+    assert proxy_hits == []
+
+    with page.expect_request(lambda req: "/api/proxy" in req.url, timeout=10000):
+        page.locator("#streamList .stream-item").filter(has_text="Demo News").click()
+    assert any("/api/proxy" in url for url in proxy_hits)
 
 
 def test_share_dialog_opens_with_releases_qr(ui_server: str, page: Page) -> None:
@@ -294,13 +353,14 @@ def test_narrow_hide_channels_slides_sidebar_offscreen(ui_server: str, page: Pag
     page.wait_for_selector("#streamList .stream-item")
 
     expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
+    expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
     initial_x = page.evaluate(
         "() => document.getElementById('sidebar').getBoundingClientRect().x"
     )
     assert initial_x == 0
 
     page.locator("#browseToggleBtn").click()
-    expect(page.locator("#browseToggleBtn")).to_have_text("Show channels")
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show")
     expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
 
     page.wait_for_function(
@@ -311,7 +371,7 @@ def test_narrow_hide_channels_slides_sidebar_offscreen(ui_server: str, page: Pag
     )
 
     page.locator("#browseToggleBtn").click()
-    expect(page.locator("#browseToggleBtn")).to_have_text("Hide channels")
+    expect(page.locator("#browseToggleBtn")).to_have_text("Hide")
     page.wait_for_function(
         """() => {
           const r = document.getElementById('sidebar').getBoundingClientRect();
@@ -329,7 +389,7 @@ def test_narrow_search_focus_keeps_sidebar_hidden(ui_server: str, page: Page) ->
     expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
 
     page.locator("#browseToggleBtn").click()
-    expect(page.locator("#browseToggleBtn")).to_have_text("Show channels")
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show")
     expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
     page.wait_for_function(
         """() => {
@@ -341,7 +401,7 @@ def test_narrow_search_focus_keeps_sidebar_hidden(ui_server: str, page: Page) ->
     page.locator("#searchInput").evaluate("(el) => el.focus()")
     expect(page.locator("#searchInput")).to_be_focused()
     expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
-    expect(page.locator("#browseToggleBtn")).to_have_text("Show channels")
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show")
     page.wait_for_function(
         """() => {
           const r = document.getElementById('sidebar').getBoundingClientRect();
@@ -349,3 +409,52 @@ def test_narrow_search_focus_keeps_sidebar_hidden(ui_server: str, page: Page) ->
         }"""
     )
     assert "channels-open" not in (page.locator("body").get_attribute("class") or "")
+
+
+def test_phone_more_menu_holds_overflow_actions(ui_server: str, page: Page) -> None:
+    """Phone toolbar keeps Filters/Hide visible; Reset/Favorites/Fullscreen live under More."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
+    expect(page.locator("#phoneMoreBtn")).to_be_visible()
+    expect(page.locator("#filtersToggleBtn")).to_be_visible()
+    expect(page.locator("#browseToggleBtn")).to_be_visible()
+
+    assert page.evaluate(
+        """() => {
+          const panel = document.getElementById('phoneMorePanel');
+          const reset = document.getElementById('resetFiltersBtnCompact');
+          const fav = document.getElementById('favoritesToggleBtn');
+          const full = document.getElementById('fullscreenBtn');
+          return Boolean(
+            panel &&
+            reset && fav && full &&
+            reset.parentElement === panel &&
+            fav.parentElement === panel &&
+            full.parentElement === panel
+          );
+        }"""
+    )
+
+    page.locator("#phoneMoreBtn").click()
+    expect(page.locator("body")).to_have_class(re.compile(r"phone-more-open"))
+    expect(page.locator("#favoritesToggleBtn")).to_be_visible()
+    page.locator("#phoneMoreBtn").click()
+    expect(page.locator("body")).not_to_have_class(re.compile(r"phone-more-open"))
+
+
+def test_tablet_keeps_inline_toolbar_actions(ui_server: str, page: Page) -> None:
+    """Tablet narrow mode should not use the phone overflow menu."""
+    page.set_viewport_size({"width": 820, "height": 1180})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"is-phone"))
+    expect(page.locator("#phoneMoreBtn")).to_be_hidden()
+    expect(page.locator("#resetFiltersBtnCompact")).to_be_visible()
+    expect(page.locator("#favoritesToggleBtn")).to_be_visible()
+    expect(page.locator("#fullscreenBtn")).to_be_visible()
+    expect(page.locator("#browseToggleBtn")).to_have_text("Hide channels")

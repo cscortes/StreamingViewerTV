@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from builder.paths import FILTERED_STREAM_CSV, FILTERED_STREAMS_LOG
-from stream_viewer.db import STREAM_COLUMNS, set_meta
+from stream_viewer.db import STREAM_COLUMNS, favorite_key, set_meta
 
 FILTER_WHICH = frozenset({"name", "url", "tvg_id"})
 FilteredRule = tuple[int, str, str]  # filter_id, which, pattern
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS streams (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   url TEXT NOT NULL,
+  favorite_key TEXT NOT NULL DEFAULT '',
   tvg_id TEXT NOT NULL DEFAULT '',
   tvg_logo TEXT NOT NULL DEFAULT '',
   group_title TEXT NOT NULL DEFAULT '',
@@ -52,6 +53,9 @@ CREATE TABLE IF NOT EXISTS streams (
   probe_latency_ms TEXT NOT NULL DEFAULT '',
   probe_notes TEXT NOT NULL DEFAULT ''
 );
+
+CREATE INDEX IF NOT EXISTS idx_streams_favorite_key
+  ON streams(favorite_key);
 
 CREATE TABLE IF NOT EXISTS programmes (
   id INTEGER PRIMARY KEY,
@@ -236,8 +240,8 @@ def import_streams_csv(
             filtered_by_id[hit] += 1
             filtered_rows.append((hit, name, url, tvg_id))
             continue
-        values = [index, name, url]
-        for col in STREAM_COLUMNS[2:]:
+        values = [index, name, url, favorite_key(url)]
+        for col in STREAM_COLUMNS[3:]:
             values.append((raw.get(col) or "").strip())
         rows.append(tuple(values))
 

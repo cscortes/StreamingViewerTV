@@ -11,6 +11,7 @@
     offset: 0,
     limit: 80,
     selectedId: null,
+    selectedFavoriteKey: null,
     selectedMetaBits: [],
     hls: null,
     loading: false,
@@ -43,13 +44,11 @@
     nowLogo: document.getElementById("nowLogo"),
     nowTitle: document.getElementById("nowTitle"),
     nowProgramme: document.getElementById("nowProgramme"),
+    nowQuality: document.getElementById("nowQuality"),
+    nowFavorite: document.getElementById("nowFavorite"),
     nowDetails: document.getElementById("nowDetails"),
     nowStars: document.getElementById("nowStars"),
-    theaterBtn: document.getElementById("theaterBtn"),
     fullscreenBtn: document.getElementById("fullscreenBtn"),
-    openRaw: document.getElementById("openRaw"),
-    moreControlsBtn: document.getElementById("moreControlsBtn"),
-    viewControls: document.getElementById("viewControls"),
     filtersToggleBtn: document.getElementById("filtersToggleBtn"),
     favoritesToggleBtn: document.getElementById("favoritesToggleBtn"),
     favoritesHint: document.getElementById("favoritesHint"),
@@ -57,6 +56,10 @@
     browseToggleBtn: document.getElementById("browseToggleBtn"),
     showSidebarBtn: document.getElementById("showSidebarBtn"),
     resetFiltersBtnCompact: document.getElementById("resetFiltersBtnCompact"),
+    compactActions: document.getElementById("compactActions"),
+    phoneMoreWrap: document.getElementById("phoneMoreWrap"),
+    phoneMoreBtn: document.getElementById("phoneMoreBtn"),
+    phoneMorePanel: document.getElementById("phoneMorePanel"),
     filtersBadge: document.getElementById("filtersBadge"),
     sheetBackdrop: document.getElementById("sheetBackdrop"),
     filterSheetPanel: document.getElementById("filterSheetPanel"),
@@ -90,16 +93,20 @@
   const NARROW_MQ = window.matchMedia(
     "(max-width: 1100px), ((pointer: coarse) and (max-width: 1400px))"
   );
+  /* Phone: overflow toolbar + denser list under the shared narrow drawer. */
+  const PHONE_MQ = window.matchMedia("(max-width: 600px)");
 
   let searchTimer = null;
 
   const PREFS_COOKIE = "svtv_filters";
   const PREFS_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
-  const FAVORITES_KEY = "svtv_favorites";
+  const FAVORITES_KEY = "svtv_favorites_v2";
+  const FAVORITES_LEGACY_KEY = "svtv_favorites";
   const FAVORITES_HINT_KEY = "svtv_favorites_hint_seen";
   const UPDATE_INFO_HINT_KEY = "svtv_update_info_seen";
   const IS_ANDROID = document.body?.dataset?.platform === "android";
-  const MAX_FAVORITES = 500;
+  const MAX_FAVORITES = 100;
+  const FAVORITE_KEY_RE = /^[0-9a-f]{64}$/;
   const FAVORITES_TOGGLE_TITLE =
     "Favorites are saved in this browser only and may be cleared by the OS or browser.";
 
@@ -215,15 +222,20 @@
 
   function loadFavorites() {
     try {
+      localStorage.removeItem(FAVORITES_LEGACY_KEY);
+    } catch {
+      // ignore
+    }
+    try {
       const raw = localStorage.getItem(FAVORITES_KEY);
       if (!raw) return new Set();
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return new Set();
-      const ids = parsed
-        .map(Number)
-        .filter((id) => Number.isFinite(id) && id >= 0)
+      const keys = parsed
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter((key) => FAVORITE_KEY_RE.test(key))
         .slice(0, MAX_FAVORITES);
-      return new Set(ids);
+      return new Set(keys);
     } catch {
       return new Set();
     }
@@ -237,8 +249,8 @@
     }
   }
 
-  function isFavorite(id) {
-    return state.favorites.has(Number(id));
+  function isFavorite(key) {
+    return Boolean(key) && state.favorites.has(String(key));
   }
 
   function favoritesHintSeen() {
@@ -275,9 +287,9 @@
     btn.title = FAVORITES_TOGGLE_TITLE;
   }
 
-  function syncFavoriteButton(button, id) {
+  function syncFavoriteButton(button, key) {
     if (!button) return;
-    const on = isFavorite(id);
+    const on = isFavorite(key);
     button.classList.toggle("is-favorite", on);
     button.setAttribute("aria-pressed", on ? "true" : "false");
     button.setAttribute("aria-label", on ? "Remove from favorites" : "Add to favorites");
@@ -293,10 +305,10 @@
     return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12.1 21.35l-1.1-1C5.14 15.24 2 12.39 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.89-3.14 6.74-8.9 11.86l-1 0.99z"/></svg>`;
   }
 
-  function toggleFavorite(id) {
-    const streamId = Number(id);
-    if (!Number.isFinite(streamId) || streamId < 0) return;
-    const adding = !state.favorites.has(streamId);
+  function toggleFavorite(key) {
+    const favKey = String(key || "").trim().toLowerCase();
+    if (!FAVORITE_KEY_RE.test(favKey)) return;
+    const adding = !state.favorites.has(favKey);
     if (adding) {
       if (state.favorites.size >= MAX_FAVORITES) {
         state.statusMessage = `Favorites limit reached (${MAX_FAVORITES})`;
@@ -304,16 +316,17 @@
         updateStatusBar();
         return;
       }
-      state.favorites.add(streamId);
+      state.favorites.add(favKey);
     } else {
-      state.favorites.delete(streamId);
+      state.favorites.delete(favKey);
     }
     saveFavorites();
     for (const button of els.streamList.querySelectorAll(
-      `.favorite-btn[data-id="${streamId}"]`
+      `.favorite-btn[data-fav-key="${favKey}"]`
     )) {
-      syncFavoriteButton(button, streamId);
+      syncFavoriteButton(button, favKey);
     }
+    syncNowFavoriteMark();
     if (adding) showFavoritesHint();
     if (state.favoritesOnly) {
       loadStreams({ reset: true });
@@ -331,11 +344,13 @@
   function maybePruneFavorites() {
     if (!state.favoritesOnly || hasNarrowingFilters()) return;
     if (state.items.length < state.total) return;
-    const alive = new Set(state.items.map((item) => Number(item.id)));
+    const alive = new Set(
+      state.items.map((item) => String(item.favorite_key || "").toLowerCase())
+    );
     let changed = false;
-    for (const id of [...state.favorites]) {
-      if (!alive.has(id)) {
-        state.favorites.delete(id);
+    for (const key of [...state.favorites]) {
+      if (!alive.has(key)) {
+        state.favorites.delete(key);
         changed = true;
       }
     }
@@ -346,10 +361,60 @@
     return NARROW_MQ.matches;
   }
 
+  function isPhone() {
+    return PHONE_MQ.matches;
+  }
+
   function placeFilterForm() {
     if (!els.filterForm || !els.filterSheetBody) return;
     if (els.filterForm.parentElement !== els.filterSheetBody) {
       els.filterSheetBody.appendChild(els.filterForm);
+    }
+  }
+
+  function phoneOverflowItems() {
+    return [els.resetFiltersBtnCompact, els.favoritesToggleBtn, els.fullscreenBtn].filter(Boolean);
+  }
+
+  function closePhoneMoreMenu() {
+    document.body.classList.remove("phone-more-open");
+    if (els.phoneMorePanel) els.phoneMorePanel.hidden = true;
+    if (els.phoneMoreBtn) els.phoneMoreBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function openPhoneMoreMenu() {
+    if (!isPhone()) return;
+    closeFilterSheet();
+    closeShareDialog();
+    if (els.phoneMorePanel) els.phoneMorePanel.hidden = false;
+    document.body.classList.add("phone-more-open");
+    if (els.phoneMoreBtn) els.phoneMoreBtn.setAttribute("aria-expanded", "true");
+  }
+
+  function togglePhoneMoreMenu() {
+    if (document.body.classList.contains("phone-more-open")) closePhoneMoreMenu();
+    else openPhoneMoreMenu();
+  }
+
+  function placePhoneOverflowItems() {
+    if (!els.compactActions || !els.phoneMorePanel || !els.phoneMoreWrap) return;
+    if (isPhone()) {
+      for (const el of phoneOverflowItems()) {
+        if (el.parentElement !== els.phoneMorePanel) {
+          els.phoneMorePanel.appendChild(el);
+        }
+      }
+      return;
+    }
+    closePhoneMoreMenu();
+    if (els.resetFiltersBtnCompact && els.filtersToggleBtn) {
+      els.compactActions.insertBefore(els.resetFiltersBtnCompact, els.filtersToggleBtn);
+    }
+    if (els.favoritesToggleBtn && els.browseToggleBtn) {
+      els.compactActions.insertBefore(els.favoritesToggleBtn, els.browseToggleBtn);
+    }
+    if (els.fullscreenBtn && els.phoneMoreWrap) {
+      els.compactActions.insertBefore(els.fullscreenBtn, els.phoneMoreWrap);
     }
   }
 
@@ -404,6 +469,7 @@
 
   function openShareDialog() {
     closeFilterSheet();
+    closePhoneMoreMenu();
     if (els.shareDialog) els.shareDialog.hidden = false;
     if (els.sheetBackdrop) els.sheetBackdrop.hidden = false;
     document.body.classList.add("share-dialog-open");
@@ -418,6 +484,7 @@
   function openFilterSheet() {
     placeFilterForm();
     closeShareDialog();
+    closePhoneMoreMenu();
     if (isNarrow()) setChannelsOpen(false);
     document.body.classList.add("filter-sheet-open");
     if (els.filterSheetPanel) els.filterSheetPanel.hidden = false;
@@ -446,6 +513,7 @@
     if (open) {
       closeFilterSheet();
       closeShareDialog();
+      closePhoneMoreMenu();
       // Backdrop only when the drawer is a temporary overlay over watch-first.
       if (state.watchFirst && els.sheetBackdrop) els.sheetBackdrop.hidden = false;
     } else if (
@@ -461,11 +529,12 @@
     state.theater = state.watchFirst;
     if (els.layout) els.layout.classList.toggle("theater", state.watchFirst && !isNarrow());
     document.body.classList.toggle("theater-mode", state.watchFirst && !isNarrow());
-    if (els.theaterBtn) {
-      els.theaterBtn.textContent = state.watchFirst ? "Exit theater" : "Theater";
-    }
     if (els.browseToggleBtn) {
-      els.browseToggleBtn.textContent = state.watchFirst ? "Show channels" : "Hide channels";
+      if (isPhone()) {
+        els.browseToggleBtn.textContent = state.watchFirst ? "Show" : "Hide";
+      } else {
+        els.browseToggleBtn.textContent = state.watchFirst ? "Show channels" : "Hide channels";
+      }
     }
   }
 
@@ -476,9 +545,8 @@
     else document.body.classList.remove("channels-open");
     closeFilterSheet();
     closeShareDialog();
+    closePhoneMoreMenu();
     syncTheaterChrome();
-    if (els.nowPlaying) els.nowPlaying.classList.remove("controls-open");
-    if (els.moreControlsBtn) els.moreControlsBtn.setAttribute("aria-expanded", "false");
   }
 
   function exitWatchFirst() {
@@ -491,13 +559,17 @@
   function syncUiMode() {
     document.body.classList.add("ui-chrome-compact");
     const narrow = isNarrow();
+    const phone = isPhone();
     document.body.classList.toggle("is-narrow", narrow);
+    document.body.classList.toggle("is-phone", phone);
     document.body.classList.remove("is-compact");
     placeFilterForm();
+    placePhoneOverflowItems();
 
     if (!narrow) {
       document.body.classList.remove("channels-open");
     }
+    if (!phone) closePhoneMoreMenu();
 
     if (state.watchFirst) {
       enterWatchFirst();
@@ -630,7 +702,7 @@
     if (q) params.set("q", q);
     if (state.source) params.set("source", state.source);
     if (state.favoritesOnly && state.favorites.size) {
-      params.set("ids", [...state.favorites].join(","));
+      params.set("favorite_keys", [...state.favorites].join(","));
     }
     return params;
   }
@@ -834,24 +906,42 @@
     const node = els.nowProgramme;
     if (!node) return;
     node.classList.remove("is-pending", "is-empty", "has-title");
-    if (pending) {
-      node.textContent = "Fetching…";
-      node.dataset.state = "pending";
-      node.classList.add("is-pending");
-      node.title = "Loading programme guide…";
+    // Overlay: only show a real programme title — never "No data" / Fetching….
+    if (pending || !(info && info.title)) {
+      node.hidden = true;
+      node.textContent = "";
+      node.dataset.state = pending ? "pending" : "empty";
+      node.removeAttribute("title");
       return;
     }
-    if (info && info.title) {
-      node.textContent = info.title;
-      node.dataset.state = "title";
-      node.classList.add("has-title");
-      node.title = info.title;
+    node.hidden = false;
+    node.textContent = info.title;
+    node.dataset.state = "title";
+    node.classList.add("has-title");
+    node.title = info.title;
+  }
+
+  function setNowQuality(quality) {
+    const node = els.nowQuality;
+    if (!node) return;
+    const label = String(quality || "").trim();
+    if (!label) {
+      node.hidden = true;
+      node.textContent = "";
       return;
     }
-    node.textContent = "No data";
-    node.dataset.state = "empty";
-    node.classList.add("is-empty");
-    node.title = "No programme data for this channel";
+    node.hidden = false;
+    node.textContent = label;
+    node.title = `Resolution: ${label}`;
+  }
+
+  function syncNowFavoriteMark() {
+    const node = els.nowFavorite;
+    if (!node) return;
+    const on = Boolean(
+      state.selectedFavoriteKey && isFavorite(state.selectedFavoriteKey)
+    );
+    node.hidden = !on;
   }
 
   function setStreamNowLine(node, info, { pending = false } = {}) {
@@ -886,15 +976,19 @@
     els.nowTitle.textContent = stream.name;
     const bits = metaBits(stream);
     state.selectedMetaBits = bits;
+    state.selectedFavoriteKey = String(stream.favorite_key || "")
+      .trim()
+      .toLowerCase();
     const hasNow = Boolean(stream.now_playing && stream.now_playing.title);
     setViewerProgramme(hasNow ? stream.now_playing : null, { pending: !hasNow });
+    setNowQuality(stream.video_quality);
+    syncNowFavoriteMark();
     els.nowDetails.textContent = formatNowDetails(bits);
     // If detail payload had no EPG yet, resolve in background.
     if (!hasNow) {
       refreshNowPlaying([stream.id]);
     }
     fillStars(els.nowStars, stream.stream_quality);
-    els.openRaw.href = stream.url;
 
     if (stream.tvg_logo) {
       els.nowLogo.hidden = false;
@@ -1092,12 +1186,12 @@
       const favBtn = document.createElement("button");
       favBtn.type = "button";
       favBtn.className = "favorite-btn";
-      favBtn.dataset.id = String(item.id);
-      syncFavoriteButton(favBtn, item.id);
+      favBtn.dataset.favKey = String(item.favorite_key || "");
+      syncFavoriteButton(favBtn, item.favorite_key);
       favBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        toggleFavorite(item.id);
+        toggleFavorite(item.favorite_key);
       });
 
       row.append(selectBtn, favBtn);
@@ -1314,7 +1408,11 @@
 
   document.addEventListener("fullscreenchange", () => {
     document.body.classList.toggle("is-fullscreen", Boolean(document.fullscreenElement));
-    els.fullscreenBtn.textContent = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
+    if (els.fullscreenBtn) {
+      els.fullscreenBtn.textContent = document.fullscreenElement
+        ? "Exit fullscreen"
+        : "Fullscreen";
+    }
   });
 
   els.searchInput.addEventListener("input", () => {
@@ -1340,9 +1438,12 @@
   els.resetFiltersBtnCompact?.addEventListener("click", () => {
     resetFilters();
     updateFiltersBadge();
+    closePhoneMoreMenu();
   });
-  els.theaterBtn.addEventListener("click", toggleTheater);
-  els.fullscreenBtn.addEventListener("click", toggleFullscreen);
+  els.fullscreenBtn?.addEventListener("click", () => {
+    closePhoneMoreMenu();
+    toggleFullscreen();
+  });
 
   els.filtersToggleBtn?.addEventListener("click", () => {
     if (state.watchFirst) exitWatchFirst();
@@ -1354,6 +1455,7 @@
     syncFavoritesToggle();
     savePrefs();
     loadStreams({ reset: true });
+    closePhoneMoreMenu();
   });
   els.favoritesHintDismiss?.addEventListener("click", () => {
     hideFavoritesHint({ persist: true });
@@ -1362,16 +1464,18 @@
   els.shareBtn?.addEventListener("click", toggleShareDialog);
   els.shareDialogCloseBtn?.addEventListener("click", closeShareDialog);
   els.browseToggleBtn?.addEventListener("click", () => {
+    closePhoneMoreMenu();
     toggleTheater();
+  });
+  els.phoneMoreBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    togglePhoneMoreMenu();
+  });
+  els.phoneMorePanel?.addEventListener("click", (event) => {
+    event.stopPropagation();
   });
   els.showSidebarBtn?.addEventListener("click", () => {
     exitWatchFirst();
-  });
-  els.moreControlsBtn?.addEventListener("click", () => {
-    if (!els.nowPlaying) return;
-    const open = !els.nowPlaying.classList.contains("controls-open");
-    els.nowPlaying.classList.toggle("controls-open", open);
-    els.moreControlsBtn.setAttribute("aria-expanded", open ? "true" : "false");
   });
   els.statusDetailsBtn?.addEventListener("click", () => {
     const open = !document.body.classList.contains("status-details-open");
@@ -1382,7 +1486,16 @@
   els.sheetBackdrop?.addEventListener("click", () => {
     closeFilterSheet();
     closeShareDialog();
+    closePhoneMoreMenu();
     if (state.watchFirst) setChannelsOpen(false);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!document.body.classList.contains("phone-more-open")) return;
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (els.phoneMoreWrap?.contains(target)) return;
+    closePhoneMoreMenu();
   });
 
   els.video.addEventListener("waiting", () => {
@@ -1424,11 +1537,13 @@
     if (event.key === "Escape") {
       closeFilterSheet();
       closeShareDialog();
+      closePhoneMoreMenu();
       if (isNarrow() && state.watchFirst) setChannelsOpen(false);
     }
   });
 
   NARROW_MQ.addEventListener?.("change", syncUiMode);
+  PHONE_MQ.addEventListener?.("change", syncUiMode);
   window.addEventListener("resize", () => {
     syncUiMode();
   });

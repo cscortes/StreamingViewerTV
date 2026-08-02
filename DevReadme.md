@@ -75,6 +75,8 @@ make build-probed LIMIT=100
 ```
 
 Output: **`iptv_export/viewer.db`** (`streams`, `programmes`, `guide_sources`, `meta`).
+The `streams` table includes `favorite_key` (full SHA-256 hex of the stripped URL),
+computed at CSV import and indexed as `idx_streams_favorite_key`.
 
 ### Optional builder steps
 
@@ -184,10 +186,16 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 - Search by name / metadata; infinite-scroll sidebar
 - Filters: category, country, language, topic, video quality, stream quality, maturity (when present)
 - Filter / source prefs stored in a `svtv_filters` cookie; resizable sidebar splitter
+- Favorites: full SHA-256 of stream URL stored as `streams.favorite_key` at catalog
+  import; browser keeps up to **100** keys in `localStorage` `svtv_favorites_v2`
+  (legacy int `svtv_favorites` wiped on load). Favorites mode filters via
+  `GET /api/streams?favorite_keys=` (paginated, catalog-only — does not open proxy
+  sessions). Playback still starts only when the user selects a channel.
 - HLS playback via a local proxy (Referer / User-Agent, short session URLs, M3U8 rewrite after redirects)
-- **Theater** expands the player and hides the sidebar (`T`)
-- **Fullscreen** uses the browser fullscreen API on the player (`F`)
-- Bottom **status bar**: stream/match/listed counts, `tvg_id` coverage, Guide state, playback state, errors, message
+- **Hide channels** / watch-first collapses the sidebar (`T`); **Fullscreen** uses the
+  browser fullscreen API on the player (`F`)
+- Bottom **status bar**: stream/match/listed counts, `tvg_id` coverage, Guide state,
+  playback state, errors, message; **Share** beside **Details**
 
 ### What's on now (EPG)
 
