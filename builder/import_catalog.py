@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import csv
+import fnmatch
 import gzip
 import io
 import re
 import sqlite3
 import time
 import xml.etree.ElementTree as ET
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from builder.paths import FILTERED_STREAM_CSV, FILTERED_STREAMS_LOG
 from stream_viewer.db import STREAM_COLUMNS, set_meta
+
+FILTER_WHICH = frozenset({"name", "url", "tvg_id"})
+FilteredRule = tuple[int, str, str]  # filter_id, which, pattern
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -112,19 +118,145 @@ def clear_programmes(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM guide_sources")
 
 
-def import_streams_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
+def load_filtered_stream_rules(path: Path | None = None) -> list[FilteredRule]:
+    """Load blocklist rules from filtered_stream.csv. Missing file → no rules."""
+    csv_path = path if path is not None else FILTERED_STREAM_CSV
+    if not csv_path.is_file():
+        return []
+
+    text = csv_path.read_text(encoding="utf-8", errors="replace").replace("\x00", "")
+    reader = csv.DictReader(text.splitlines())
+    rules: list[FilteredRule] = []
+    seen_ids: set[int] = set()
+    for line_no, raw in enumerate(reader, start=2):
+        raw_id = (raw.get("filter_id") or "").strip()
+        which = (raw.get("which") or "").strip().lower()
+        if not raw_id:
+            print(f"  [warn] {csv_path.name}:{line_no}: skipping row with empty filter_id")
+            continue
+        try:
+            filter_id = int(raw_id)
+        except ValueError:
+            print(
+                f"  [warn] {csv_path.name}:{line_no}: skipping row with "
+                f"non-numeric filter_id={raw_id!r}"
+            )
+            continue
+        if filter_id in seen_ids:
+            print(
+                f"  [warn] {csv_path.name}:{line_no}: skipping row with "
+                f"duplicate filter_id={filter_id}"
+            )
+            continue
+        if which not in FILTER_WHICH:
+            print(
+                f"  [warn] {csv_path.name}:{line_no}: skipping row with invalid which={which!r}"
+            )
+            continue
+        pattern = (raw.get(which) or "").strip()
+        if not pattern:
+            print(
+                f"  [warn] {csv_path.name}:{line_no}: skipping row filter_id={filter_id} "
+                f"with empty {which} pattern"
+            )
+            continue
+        seen_ids.add(filter_id)
+        rules.append((filter_id, which, pattern))
+    return rules
+
+
+def matching_filter_id(
+    row: dict[str, str], rules: list[FilteredRule]
+) -> int | None:
+    """Return the first matching filter_id, or None if the row is kept."""
+    name = (row.get("name") or "").strip()
+    url = (row.get("url") or "").strip()
+    tvg_id = (row.get("tvg_id") or "").strip()
+    name_l = name.lower()
+    url_l = url.lower()
+
+    for filter_id, which, pattern in rules:
+        if which == "name":
+            if fnmatch.fnmatchcase(name_l, pattern.lower()):
+                return filter_id
+        elif which == "url":
+            if fnmatch.fnmatchcase(url_l, pattern.lower()):
+                return filter_id
+        elif which == "tvg_id":
+            if tvg_id == pattern:
+                return filter_id
+    return None
+
+
+def row_is_filtered(row: dict[str, str], rules: list[FilteredRule]) -> bool:
+    return matching_filter_id(row, rules) is not None
+
+
+def write_filtered_streams_log(
+    log_path: Path,
+    *,
+    source_name: str,
+    rules_count: int,
+    filtered_rows: list[tuple[int, str, str, str]],
+) -> None:
+    """Overwrite the review log with every stream excluded by the blocklist."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    written_at = datetime.now(timezone.utc).isoformat()
+    lines = [
+        f"# filtered_streams.log — written {written_at}",
+        f"# source={source_name} rules={rules_count} filtered={len(filtered_rows)}",
+        "# filter_id\tname\turl\ttvg_id",
+    ]
+    for filter_id, name, url, tvg_id in filtered_rows:
+        lines.append(f"{filter_id}\t{name}\t{url}\t{tvg_id}")
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def import_streams_csv(
+    conn: sqlite3.Connection,
+    csv_path: Path,
+    *,
+    filter_path: Path | None = None,
+    log_path: Path | None = None,
+) -> int:
+    rules = load_filtered_stream_rules(filter_path)
     text = csv_path.read_text(encoding="utf-8", errors="replace").replace("\x00", "")
     reader = csv.DictReader(text.splitlines())
     rows: list[tuple[Any, ...]] = []
+    filtered_by_id: Counter[int] = Counter()
+    filtered_rows: list[tuple[int, str, str, str]] = []
     for index, raw in enumerate(reader):
         name = (raw.get("name") or "").strip()
         url = (raw.get("url") or "").strip()
         if not name or not url:
             continue
+        hit = matching_filter_id(raw, rules)
+        if hit is not None:
+            tvg_id = (raw.get("tvg_id") or "").strip()
+            filtered_by_id[hit] += 1
+            filtered_rows.append((hit, name, url, tvg_id))
+            continue
         values = [index, name, url]
         for col in STREAM_COLUMNS[2:]:
             values.append((raw.get(col) or "").strip())
         rows.append(tuple(values))
+
+    filtered_total = sum(filtered_by_id.values())
+    out_log = log_path if log_path is not None else FILTERED_STREAMS_LOG
+    write_filtered_streams_log(
+        out_log,
+        source_name=csv_path.name,
+        rules_count=len(rules),
+        filtered_rows=filtered_rows,
+    )
+    if rules:
+        print(
+            f"  filtered streams: {filtered_total} "
+            f"(rules={len(rules)} from {(filter_path or FILTERED_STREAM_CSV).name})"
+        )
+        for filter_id, count in sorted(filtered_by_id.items()):
+            print(f"    {filter_id}: {count}")
+        print(f"  filtered log: {out_log}")
 
     clear_streams(conn)
     placeholders = ",".join("?" for _ in range(len(STREAM_COLUMNS) + 1))
@@ -135,6 +267,7 @@ def import_streams_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
     )
     set_meta(conn, "streams_source", str(csv_path.name))
     set_meta(conn, "streams_count", str(len(rows)))
+    set_meta(conn, "streams_filtered_count", str(filtered_total))
     set_meta(conn, "streams_imported_at", datetime.now(timezone.utc).isoformat())
     conn.commit()
     return len(rows)

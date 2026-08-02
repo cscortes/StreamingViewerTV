@@ -318,3 +318,34 @@ def test_narrow_hide_channels_slides_sidebar_offscreen(ui_server: str, page: Pag
           return r.x === 0 && r.width > 100;
         }"""
     )
+
+
+def test_narrow_search_focus_keeps_sidebar_hidden(ui_server: str, page: Page) -> None:
+    """Android/narrow: focusing search must not reopen a hidden channel drawer."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
+
+    page.locator("#browseToggleBtn").click()
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show channels")
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+    page.wait_for_function(
+        """() => {
+          const r = document.getElementById('sidebar').getBoundingClientRect();
+          return r.right <= 1;
+        }"""
+    )
+
+    page.locator("#searchInput").evaluate("(el) => el.focus()")
+    expect(page.locator("#searchInput")).to_be_focused()
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show channels")
+    page.wait_for_function(
+        """() => {
+          const r = document.getElementById('sidebar').getBoundingClientRect();
+          return r.right <= 1;
+        }"""
+    )
+    assert "channels-open" not in (page.locator("body").get_attribute("class") or "")

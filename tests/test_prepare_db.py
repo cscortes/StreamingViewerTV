@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from builder import import_catalog
 from builder import paths as builder_paths
 from builder import prepare_db
 
@@ -69,6 +70,8 @@ def isolated_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     streams_enriched_csv = export / "streams_enriched.csv"
     streams_probed_csv = export / "streams_probed.csv"
     viewer_db = export / "viewer.db"
+    filtered_stream_csv = tmp_path / "builder" / "filtered_stream.csv"
+    filtered_streams_log = export / "filtered_streams.log"
 
     overrides = {
         "ROOT": tmp_path,
@@ -79,10 +82,13 @@ def isolated_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "STREAMS_CSV": streams_csv,
         "STREAMS_ENRICHED_CSV": streams_enriched_csv,
         "STREAMS_PROBED_CSV": streams_probed_csv,
+        "FILTERED_STREAM_CSV": filtered_stream_csv,
+        "FILTERED_STREAMS_LOG": filtered_streams_log,
     }
     for name, value in overrides.items():
         monkeypatch.setattr(builder_paths, name, value, raising=False)
         monkeypatch.setattr(prepare_db, name, value, raising=False)
+        monkeypatch.setattr(import_catalog, name, value, raising=False)
 
     # choose_streams_csv() reads this tuple from builder.paths at call time.
     monkeypatch.setattr(

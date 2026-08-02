@@ -13,6 +13,8 @@ VIEWER_DB = EXPORT_DIR / "viewer.db"
 STREAMS_CSV = EXPORT_DIR / "streams.csv"
 STREAMS_ENRICHED_CSV = EXPORT_DIR / "streams_enriched.csv"
 STREAMS_PROBED_CSV = EXPORT_DIR / "streams_probed.csv"
+FILTERED_STREAM_CSV = ROOT / "builder" / "filtered_stream.csv"
+FILTERED_STREAMS_LOG = EXPORT_DIR / "filtered_streams.log"
 
 STREAM_CSV_CANDIDATES = (
     STREAMS_PROBED_CSV,

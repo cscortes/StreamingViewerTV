@@ -67,7 +67,7 @@ Grab a newer release from the [Releases page](../../releases) for fresher channe
 
 - **Search** in the slim toolbar to filter by channel name or metadata.
 - **Filters** (category, country, language, quality, etc.) open from the **Filters** button (not a permanent row of dropdowns).
-- On wide desktop, the channel list stays in a **docked, resizable sidebar** while browsing. On phones/tablets (narrow viewports), use **Channels** to open the list as an overlay drawer.
+- On wide desktop, the channel list stays in a **docked, resizable sidebar** while browsing. On phones/tablets (narrow viewports), the list opens as an overlay drawer.
 - Click any channel to start watching. The channel list stays open until you collapse it with **Hide channels**, **Theater** (⋯ menu), or **T**. Use **Show channels** (toolbar or the left-edge tab) or **T** again to bring the list back.
 - Press **F** to toggle **Fullscreen**.
 - The status bar at the bottom shows essentials; tap **Details** for the full stats.

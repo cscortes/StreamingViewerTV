@@ -181,3 +181,22 @@ def test_update_check_ui_wiring_present():
     assert "dismissedUpdateVersion" in js
     assert "showUpdateNotice" in js
     assert "checkForUpdate()" in js
+    assert "UPDATE_INFO_HINT_KEY" in js
+    assert "svtv_update_info_seen" in js
+    assert 'data-platform="android"' in html
+    assert "IS_ANDROID" in js
+    assert "Newer release online" in js
+    assert "updateInfoHintSeen" in js
+    assert "markUpdateInfoHintSeen" in js
+
+
+def test_index_android_platform_attr(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("STREAM_VIEWER_ANDROID", "1")
+    html = client.get("/").text
+    assert 'data-platform="android"' in html
+
+
+def test_index_desktop_omits_android_platform_attr(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("STREAM_VIEWER_ANDROID", raising=False)
+    html = client.get("/").text
+    assert 'data-platform="android"' not in html

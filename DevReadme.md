@@ -35,6 +35,7 @@ builder/                 # offline data pipeline
   check_urls.py           # live URL checks via the viewer proxy
   prepare_db.py           # orchestrate + import viewer.db
   paths.py                 # shared iptv_export paths
+  filtered_stream.csv      # blocklist applied at DB import
 
 stream_viewer/           # FastAPI UI (runtime)
   app.py
@@ -94,6 +95,8 @@ Then: `uv run stream-viewer-build --skip-download`
 | `iptv_export/streams.csv` | Raw playlist extract |
 | `iptv_export/streams_enriched.csv` | + country/language/topics/quality |
 | `iptv_export/streams_probed.csv` | Optional probe grades (preferred if present) |
+| `builder/filtered_stream.csv` | Blocklist: exclude matching streams at DB import |
+| `iptv_export/filtered_streams.log` | Review log of streams excluded on last import |
 | `iptv_export/epg/*.xml` | XMLTV guides imported into `programmes` |
 
 ## CSV columns
@@ -126,6 +129,33 @@ All base columns, plus:
 | `video_quality` | e.g. `1080p`, `720p`, `SD` | streams API / name parse / probe |
 | `stream_quality` | `excellent` / `okay` / `poor` / `unknown` | probe script |
 | `popularity` | Placeholder (`unknown`) | fill later from app usage |
+
+### Blocklist (`builder/filtered_stream.csv`)
+
+Applied during SQLite import: every stream that matches a rule is excluded from
+`viewer.db` (all matches, not first-hit-only). Intermediate `streams*.csv` files
+are left unchanged.
+
+| Column | Meaning |
+|--------|---------|
+| `filter_id` | Unique numeric id for the rule (logging / debugging) |
+| `which` | Field to match: `name`, `url`, or `tvg_id` |
+| `name` | Pattern when `which=name` (`*` wildcards, case-insensitive) |
+| `url` | Pattern when `which=url` (`*` wildcards, case-insensitive) |
+| `tvg_id` | Exact id when `which=tvg_id` (no wildcards) |
+
+Example:
+
+```csv
+filter_id,which,name,url,tvg_id
+1,name,Dating Naked UK,,
+2,url,,*://cdn.example.com/*,
+3,tvg_id,,,DemoChannel.us
+```
+
+Each import overwrites `iptv_export/filtered_streams.log` with every excluded
+stream (`filter_id`, `name`, `url`, `tvg_id`, tab-separated) for later review.
+The log is a build artifact under gitignored `iptv_export/`.
 
 ### Probe grades (`builder.probe`)
 

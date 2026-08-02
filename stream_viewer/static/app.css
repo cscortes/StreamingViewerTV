@@ -1366,11 +1366,6 @@ body.ui-chrome-compact #browseToggleBtn {
   display: inline-flex;
 }
 
-/* Channels drawer control is for narrow/touch only */
-body.ui-chrome-compact:not(.is-narrow) #channelsToggleBtn {
-  display: none !important;
-}
-
 /* Edge tab when the channel list is collapsed */
 body.ui-chrome-compact.watch-first:not(.is-narrow) .show-sidebar-btn,
 body.is-narrow.watch-first:not(.channels-open) .show-sidebar-btn {

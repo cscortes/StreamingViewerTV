@@ -1092,6 +1092,7 @@ async def index(request: Request) -> HTMLResponse:
             "sources": available_sources(),
             "filters": catalog.get("filters") or {},
             "version": __version__,
+            "android": os.environ.get("STREAM_VIEWER_ANDROID") == "1",
         },
     )
 

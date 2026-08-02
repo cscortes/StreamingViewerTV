@@ -54,7 +54,6 @@
     favoritesToggleBtn: document.getElementById("favoritesToggleBtn"),
     favoritesHint: document.getElementById("favoritesHint"),
     favoritesHintDismiss: document.getElementById("favoritesHintDismiss"),
-    channelsToggleBtn: document.getElementById("channelsToggleBtn"),
     browseToggleBtn: document.getElementById("browseToggleBtn"),
     showSidebarBtn: document.getElementById("showSidebarBtn"),
     resetFiltersBtnCompact: document.getElementById("resetFiltersBtnCompact"),
@@ -98,6 +97,8 @@
   const PREFS_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
   const FAVORITES_KEY = "svtv_favorites";
   const FAVORITES_HINT_KEY = "svtv_favorites_hint_seen";
+  const UPDATE_INFO_HINT_KEY = "svtv_update_info_seen";
+  const IS_ANDROID = document.body?.dataset?.platform === "android";
   const MAX_FAVORITES = 500;
   const FAVORITES_TOGGLE_TITLE =
     "Favorites are saved in this browser only and may be cleared by the OS or browser.";
@@ -432,7 +433,6 @@
   function setChannelsOpen(open) {
     if (!isNarrow()) {
       document.body.classList.remove("channels-open");
-      if (els.channelsToggleBtn) els.channelsToggleBtn.setAttribute("aria-expanded", "false");
       if (
         els.sheetBackdrop &&
         !document.body.classList.contains("filter-sheet-open") &&
@@ -443,9 +443,6 @@
       return;
     }
     document.body.classList.toggle("channels-open", Boolean(open));
-    if (els.channelsToggleBtn) {
-      els.channelsToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    }
     if (open) {
       closeFilterSheet();
       closeShareDialog();
@@ -500,7 +497,6 @@
 
     if (!narrow) {
       document.body.classList.remove("channels-open");
-      if (els.channelsToggleBtn) els.channelsToggleBtn.setAttribute("aria-expanded", "false");
     }
 
     if (state.watchFirst) {
@@ -1330,7 +1326,9 @@
   });
 
   els.searchInput.addEventListener("focus", () => {
-    if (state.watchFirst) exitWatchFirst();
+    // On narrow/Android the drawer is independent of search (search stays in the
+    // top bar). Exiting watch-first here would force the sidebar open again.
+    if (state.watchFirst && !isNarrow()) exitWatchFirst();
   });
 
   els.filterForm.addEventListener("change", () => {
@@ -1363,11 +1361,6 @@
   els.filterSheetDoneBtn?.addEventListener("click", closeFilterSheet);
   els.shareBtn?.addEventListener("click", toggleShareDialog);
   els.shareDialogCloseBtn?.addEventListener("click", closeShareDialog);
-  els.channelsToggleBtn?.addEventListener("click", () => {
-    if (!isNarrow()) return;
-    const open = !document.body.classList.contains("channels-open");
-    setChannelsOpen(open);
-  });
   els.browseToggleBtn?.addEventListener("click", () => {
     toggleTheater();
   });
@@ -1444,7 +1437,24 @@
     if (els.updateAvailable) els.updateAvailable.hidden = true;
   }
 
+  function updateInfoHintSeen() {
+    try {
+      return localStorage.getItem(UPDATE_INFO_HINT_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function markUpdateInfoHintSeen() {
+    try {
+      localStorage.setItem(UPDATE_INFO_HINT_KEY, "1");
+    } catch {
+      // ignore
+    }
+  }
+
   function linkStatusVersion(releaseUrl) {
+    if (IS_ANDROID) return;
     const valueEl = els.statusVersionValue;
     if (!valueEl || !releaseUrl) return;
     if (valueEl.tagName === "A") {
@@ -1467,28 +1477,42 @@
     if (!els.updateAvailable || !els.updateAvailableLink || !releaseUrl) return;
     els.updateAvailable.dataset.latest = latest;
     els.updateAvailableLink.href = releaseUrl;
-    els.updateAvailableLink.title = `Version ${latest} is available`;
+    if (IS_ANDROID) {
+      els.updateAvailableLink.textContent = "Newer release online";
+      els.updateAvailableLink.title =
+        "A newer release is on GitHub. Sideload the APK from Releases when you want it.";
+    } else {
+      els.updateAvailableLink.textContent = "Update available";
+      els.updateAvailableLink.title = `Version ${latest} is available`;
+    }
     els.updateAvailable.hidden = false;
     linkStatusVersion(releaseUrl);
   }
 
   function dismissUpdateNotice(latest) {
-    const prefs = collectPrefs();
-    prefs.dismissedUpdateVersion = latest;
-    writePrefs(prefs);
+    if (IS_ANDROID) {
+      markUpdateInfoHintSeen();
+    } else {
+      const prefs = collectPrefs();
+      prefs.dismissedUpdateVersion = latest;
+      writePrefs(prefs);
+    }
     hideUpdateNotice();
   }
 
   async function checkForUpdate() {
     try {
+      if (IS_ANDROID && updateInfoHintSeen()) return;
       const response = await fetch("/api/update");
       if (!response.ok) return;
       const data = await response.json();
       if (!data || !data.update_available || !data.latest || !data.release_url) {
         return;
       }
-      const prefs = readPrefs();
-      if (prefs.dismissedUpdateVersion === data.latest) return;
+      if (!IS_ANDROID) {
+        const prefs = readPrefs();
+        if (prefs.dismissedUpdateVersion === data.latest) return;
+      }
       showUpdateNotice(data.latest, data.release_url);
     } catch {
       // Fail-soft: offline / API errors never interrupt browsing.
@@ -1499,7 +1523,10 @@
     els.updateAvailableDismiss.addEventListener("click", () => {
       const version = els.updateAvailable?.dataset?.latest;
       if (version) dismissUpdateNotice(version);
-      else hideUpdateNotice();
+      else {
+        if (IS_ANDROID) markUpdateInfoHintSeen();
+        hideUpdateNotice();
+      }
     });
   }
 

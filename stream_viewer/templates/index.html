@@ -11,7 +11,7 @@
   <script src="/static/hls.min.js" defer></script>
   <script src="/static/app.js?v=14" defer></script>
 </head>
-<body class="ui-chrome-compact">
+<body class="ui-chrome-compact"{% if android %} data-platform="android"{% endif %}>
   <div class="atmosphere" aria-hidden="true"></div>
 
   <header class="topbar">
@@ -53,9 +53,6 @@
         title="Favorites are saved in this browser only and may be cleared by the OS or browser."
       >
         Favorites
-      </button>
-      <button type="button" class="ghost-btn compact-btn" id="channelsToggleBtn" aria-expanded="false" aria-controls="sidebar">
-        Channels
       </button>
       <button
         type="button"

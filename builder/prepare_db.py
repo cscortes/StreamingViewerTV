@@ -28,6 +28,7 @@ from builder.paths import (
     EPG_CACHE_DIR,
     EPG_DIR,
     EXPORT_DIR,
+    FILTERED_STREAM_CSV,
     ROOT,
     STREAMS_CSV,
     STREAMS_ENRICHED_CSV,
@@ -202,6 +203,14 @@ def verify_essentials() -> dict[str, Path | list[Path]]:
 
 def step_import_sqlite(csv_path: Path) -> Path:
     print("\n=== Load viewer.db ===")
+    if FILTERED_STREAM_CSV.is_file():
+        try:
+            shown = FILTERED_STREAM_CSV.relative_to(ROOT)
+        except ValueError:
+            shown = FILTERED_STREAM_CSV
+        print(f"  blocklist: {shown}")
+    else:
+        print("  blocklist: (none)")
     if VIEWER_DB.exists():
         VIEWER_DB.unlink()
     conn = connect(VIEWER_DB)

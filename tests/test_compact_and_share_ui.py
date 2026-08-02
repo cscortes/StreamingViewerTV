@@ -20,8 +20,9 @@ def test_compact_chrome_toolbar_wired():
     assert 'class="ui-chrome-compact"' in html or "ui-chrome-compact" in html
     assert 'id="filtersToggleBtn"' in html
     assert 'id="filterSheetPanel"' in html
-    assert 'id="channelsToggleBtn"' in html
+    assert 'id="channelsToggleBtn"' not in html
     assert 'id="browseToggleBtn"' in html
+    assert 'id="showSidebarBtn"' in html
     assert 'id="statusDetailsBtn"' in html
     assert 'id="moreControlsBtn"' in html
 
@@ -31,10 +32,12 @@ def test_compact_chrome_toolbar_wired():
     assert "NARROW_MQ" in js
     assert "matchMedia" in js
     assert "status-details-open" in js or "statusDetailsBtn" in js
+    assert "channelsToggleBtn" not in js
 
     assert "body.ui-chrome-compact" in css
     assert "filter-sheet-open" in css
     assert "channels-open" in css
+    assert "#channelsToggleBtn" not in css
 
 
 def test_narrow_breakpoint_driven_by_match_media():
