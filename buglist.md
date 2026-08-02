@@ -547,6 +547,9 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
 3. Manual smoke: desktop — Filters sheet, hide/show sidebar (T), Details expand;
    narrow width — Channels overlay + Filters sheet with backdrop.
 
+Canonical tests: `tests/test_compact_and_share_ui.py`,
+`tests/test_ui_filters_playwright.py` (Filters sheet + status Details).
+
 ### FEAT-005 — Unified desktop + Android release pipeline
 
 - **Reported:** 2026-08-01
@@ -572,6 +575,8 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
    versioned `StreamingViewerTV-${{ needs.plan.outputs.tag }}-android-debug.apk`.
 3. `publish-release` must `needs` all four platform jobs and pass the APK into
    `gh release create`.
+
+Canonical test: `tests/test_release_pipeline.py`.
 4. Verify after a real `0.4.0` (or later) release run that the GitHub Release includes
    Win/Linux/macOS archives **and** the Android APK.
 
@@ -620,6 +625,9 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
    `state.favorites` / `localStorage` `svtv_favorites`.
 3. Assert `/api/streams?ids=1,2` returns only those stream IDs (when present).
 
+Canonical tests: `tests/test_favorites.py`,
+`tests/test_ui_filters_playwright.py::test_favorites_filter_and_reset_preserve_stars`.
+
 ### FEAT-008 — Share QR to GitHub Releases
 
 - **Reported:** 2026-08-01
@@ -638,3 +646,6 @@ Canonical check: `grep -q -- '--probe-all' .github/workflows/release.yml` (no de
    `/static/share-releases-qr.png`.
 2. Assert the share link `href` is the GitHub `releases/latest` URL for this repo.
 3. Manual smoke: Share → scan QR → lands on the GitHub Releases page.
+
+Canonical tests: `tests/test_compact_and_share_ui.py::test_share_dialog_wiring_and_qr_asset`,
+`tests/test_ui_filters_playwright.py::test_share_dialog_opens_with_releases_qr`.

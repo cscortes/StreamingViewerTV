@@ -1,12 +1,14 @@
-"""Playwright UI checks — Category filters must be visible in the browser.
+"""Playwright UI checks — Category filters must be reachable in the browser.
 
 BUG-010/011/012 kept slipping through API-only tests. This opens a real Chromium
-page against a local uvicorn server and asserts the Category select is on-screen.
+page against a local uvicorn server and asserts the Category select is available
+via the compact Filters sheet.
 """
 
 from __future__ import annotations
 
 import csv
+import re
 import socket
 import threading
 import time
@@ -132,12 +134,23 @@ def ui_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         thread.join(timeout=10)
 
 
+def _open_filter_sheet(page: Page) -> None:
+    """Compact chrome keeps filters in a sheet until the Filters button is pressed."""
+    toggle = page.locator("#filtersToggleBtn")
+    expect(toggle).to_be_visible()
+    if toggle.get_attribute("aria-expanded") != "true":
+        toggle.click()
+    expect(page.locator("#filterSheetPanel")).to_be_visible()
+    expect(page.locator("#filter-topics")).to_be_visible()
+
+
 def test_category_and_core_filters_are_visible(ui_server: str, page: Page) -> None:
     """BUG-012 regression: Category must be visible in Chromium, not only in /api/meta."""
     page.goto(ui_server, wait_until="networkidle")
 
     filter_bar = page.locator("#filterBar")
     expect(filter_bar).to_be_visible()
+    _open_filter_sheet(page)
 
     category = page.locator("#filter-topics")
     expect(category).to_be_visible()
@@ -195,8 +208,80 @@ def test_filter_change_jumps_stream_list_to_top(ui_server: str, page: Page) -> N
     )
     assert page.evaluate("() => document.getElementById('streamListWrap').scrollTop") > 0
 
+    _open_filter_sheet(page)
     page.locator("#filter-topics").select_option("movies")
     page.wait_for_function(
         "() => document.getElementById('streamListWrap').scrollTop === 0"
     )
     expect(page.locator("#streamList")).to_contain_text("Demo Movie")
+
+
+def test_favorites_filter_and_reset_preserve_stars(ui_server: str, page: Page) -> None:
+    """FEAT-007: star a channel, Favorites narrows the list; Reset keeps stars."""
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    news_row = page.locator("#streamList .stream-item").filter(has_text="Demo News")
+    fav_btn = news_row.locator(".favorite-btn")
+    expect(fav_btn).to_have_attribute("aria-label", "Add to favorites")
+    fav_btn.click()
+    expect(fav_btn).to_have_attribute("aria-label", "Remove from favorites")
+
+    stored = page.evaluate("() => localStorage.getItem('svtv_favorites')")
+    assert stored is not None
+    assert stored != "[]"
+
+    page.locator("#favoritesToggleBtn").click()
+    expect(page.locator("#favoritesToggleBtn")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#streamList")).to_contain_text("Demo News")
+    expect(page.locator("#streamList")).not_to_contain_text("Demo Movie")
+
+    _open_filter_sheet(page)
+    page.locator("#filter-topics").select_option("movies")
+    # Favorites ∩ movies is empty for this fixture.
+    page.wait_for_function(
+        "() => document.querySelectorAll('#streamList .stream-item').length === 0"
+    )
+    page.locator("#filterSheetDoneBtn").click()
+    expect(page.locator("#filterSheetPanel")).to_be_hidden()
+
+    page.locator("#resetFiltersBtnCompact").click()
+    # Reset clears category but keeps Favorites mode and starred IDs.
+    expect(page.locator("#favoritesToggleBtn")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#streamList")).to_contain_text("Demo News")
+    expect(page.locator("#streamList")).not_to_contain_text("Demo Movie")
+    assert page.evaluate("() => localStorage.getItem('svtv_favorites')") == stored
+
+
+def test_share_dialog_opens_with_releases_qr(ui_server: str, page: Page) -> None:
+    """FEAT-008: Share opens an offline QR dialog to GitHub Releases."""
+    page.goto(ui_server, wait_until="networkidle")
+
+    page.locator("#shareBtn").click()
+    dialog = page.locator("#shareDialog")
+    expect(dialog).to_be_visible()
+    qr = page.locator("#shareQr")
+    expect(qr).to_be_visible()
+    expect(qr).to_have_attribute("src", "/static/share-releases-qr.png")
+    link = page.locator("#shareReleaseLink")
+    expect(link).to_have_attribute(
+        "href", "https://github.com/cscortes/StreamingViewerTV/releases/latest"
+    )
+
+    page.locator("#shareDialogCloseBtn").click()
+    expect(dialog).to_be_hidden()
+
+
+def test_status_details_toggle(ui_server: str, page: Page) -> None:
+    """FEAT-004: status bar Details expands catalog/guide extras."""
+    page.goto(ui_server, wait_until="networkidle")
+    details_btn = page.locator("#statusDetailsBtn")
+    expect(details_btn).to_be_visible()
+    expect(details_btn).to_have_attribute("aria-expanded", "false")
+
+    details_btn.click()
+    expect(details_btn).to_have_attribute("aria-expanded", "true")
+    expect(page.locator("body")).to_have_class(re.compile(r"status-details-open"))
+
+    details_btn.click()
+    expect(details_btn).to_have_attribute("aria-expanded", "false")
