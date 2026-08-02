@@ -424,7 +424,7 @@ def test_narrow_search_focus_keeps_sidebar_hidden(ui_server: str, page: Page) ->
 
 
 def test_phone_more_menu_holds_overflow_actions(ui_server: str, page: Page) -> None:
-    """Phone toolbar keeps Filters/Hide visible; Reset/Favorites/Fullscreen live under More."""
+    """Phone two-row chrome: Filters/Reset/Favorites/Hide inline; Fullscreen under More."""
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(ui_server, wait_until="networkidle")
     page.wait_for_selector("#streamList .stream-item")
@@ -432,27 +432,40 @@ def test_phone_more_menu_holds_overflow_actions(ui_server: str, page: Page) -> N
     expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
     expect(page.locator("#phoneMoreBtn")).to_be_visible()
     expect(page.locator("#filtersToggleBtn")).to_be_visible()
+    expect(page.locator("#resetFiltersBtnCompact")).to_be_visible()
+    expect(page.locator("#favoritesToggleBtn")).to_be_visible()
     expect(page.locator("#browseToggleBtn")).to_be_visible()
 
-    assert page.evaluate(
+    layout = page.evaluate(
         """() => {
+          const bar = document.getElementById('filterBar');
+          const search = document.querySelector('.search-wrap');
+          const actions = document.getElementById('compactActions');
           const panel = document.getElementById('phoneMorePanel');
-          const reset = document.getElementById('resetFiltersBtnCompact');
-          const fav = document.getElementById('favoritesToggleBtn');
           const full = document.getElementById('fullscreenBtn');
-          return Boolean(
-            panel &&
-            reset && fav && full &&
-            reset.parentElement === panel &&
-            fav.parentElement === panel &&
-            full.parentElement === panel
-          );
+          const br = bar.getBoundingClientRect();
+          const sr = search.getBoundingClientRect();
+          const ar = actions.getBoundingClientRect();
+          return {
+            areas: getComputedStyle(bar).gridTemplateAreas.replace(/\\s+/g, ' ').trim(),
+            actionsAboveSearch: ar.bottom <= sr.top + 1,
+            searchFullWidth: sr.width / br.width >= 0.9,
+            fullscreenInMore: Boolean(panel && full && full.parentElement === panel),
+            resetInActions: document.getElementById('resetFiltersBtnCompact')?.parentElement === actions,
+            favInActions: document.getElementById('favoritesToggleBtn')?.parentElement === actions,
+          };
         }"""
     )
+    assert "actions" in layout["areas"] and "search" in layout["areas"]
+    assert layout["actionsAboveSearch"]
+    assert layout["searchFullWidth"]
+    assert layout["fullscreenInMore"]
+    assert layout["resetInActions"]
+    assert layout["favInActions"]
 
     page.locator("#phoneMoreBtn").click()
     expect(page.locator("body")).to_have_class(re.compile(r"phone-more-open"))
-    expect(page.locator("#favoritesToggleBtn")).to_be_visible()
+    expect(page.locator("#fullscreenBtn")).to_be_visible()
     page.locator("#phoneMoreBtn").click()
     expect(page.locator("body")).not_to_have_class(re.compile(r"phone-more-open"))
 
@@ -528,3 +541,60 @@ def test_fullscreen_falls_back_to_css_immersive(ui_server: str, page: Page) -> N
     page.keyboard.press("f")
     expect(page.locator("body")).not_to_have_class(re.compile(r"is-fullscreen"))
     expect(page.locator("#fullscreenBtn")).to_have_text("Fullscreen")
+
+
+def test_filters_while_watching_keeps_sheet_usable(ui_server: str, page: Page) -> None:
+    """BUG-026: Filters while playing must not exit watch-first or leave UI stuck."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
+
+    page.locator("#streamList .stream-item").first.click()
+    page.locator("#browseToggleBtn").click()
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+
+    play_state = page.evaluate(
+        """async () => {
+          const v = document.getElementById('video');
+          const c = document.createElement('canvas');
+          c.width = 64;
+          c.height = 64;
+          c.getContext('2d').fillRect(0, 0, 64, 64);
+          v.srcObject = c.captureStream(10);
+          await v.play().catch(() => {});
+          return { paused: v.paused };
+        }"""
+    )
+    assert play_state["paused"] is False
+
+    page.locator("#filtersToggleBtn").click()
+    expect(page.locator("body")).to_have_class(re.compile(r"filter-sheet-open"))
+    # Must stay in watch mode so phone does not display:none the playing stage.
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+    expect(page.locator("body")).to_have_class(re.compile(r"overlay-suspend-video"))
+    expect(page.locator("#filterSheetPanel")).to_be_visible()
+    expect(page.locator("#filter-topics")).to_be_visible()
+
+    stage = page.evaluate(
+        """() => ({
+          display: getComputedStyle(document.getElementById('stage')).display,
+          videoPaused: document.getElementById('video').paused,
+          videoVisibility: getComputedStyle(document.getElementById('video')).visibility,
+        })"""
+    )
+    assert stage["display"] != "none"
+    assert stage["videoPaused"] is True
+    assert stage["videoVisibility"] == "hidden"
+
+    page.locator("#filter-topics").select_option("news")
+    page.locator("#filterSheetDoneBtn").click()
+    expect(page.locator("body")).not_to_have_class(re.compile(r"filter-sheet-open"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"overlay-suspend-video"))
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+
+    # UI remains interactive after closing the sheet.
+    page.locator("#browseToggleBtn").click()
+    expect(page.locator("body")).not_to_have_class(re.compile(r"watch-first"))
+    expect(page.locator("#streamList .stream-item").first).to_be_visible()

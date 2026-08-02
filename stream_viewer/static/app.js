@@ -383,7 +383,8 @@
   }
 
   function phoneOverflowItems() {
-    return [els.resetFiltersBtnCompact, els.favoritesToggleBtn, els.fullscreenBtn].filter(Boolean);
+    // Phone two-row chrome surfaces Reset/Favorites inline; only Fullscreen stays under More.
+    return [els.fullscreenBtn].filter(Boolean);
   }
 
   function closePhoneMoreMenu() {
@@ -413,6 +414,16 @@
         if (el.parentElement !== els.phoneMorePanel) {
           els.phoneMorePanel.appendChild(el);
         }
+      }
+      // Row order: Filters · Reset · Favorites · Hide · More
+      const beforeMore = [
+        els.filtersToggleBtn,
+        els.resetFiltersBtnCompact,
+        els.favoritesToggleBtn,
+        els.browseToggleBtn,
+      ];
+      for (const el of beforeMore) {
+        if (el) els.compactActions.insertBefore(el, els.phoneMoreWrap);
       }
       return;
     }
@@ -451,6 +462,37 @@
     }
   }
 
+  // Android WebView keeps a hardware video surface above HTML overlays unless the
+  // <video> is paused/hidden. Track whether we paused it so Done can resume.
+  let videoResumeAfterOverlay = false;
+
+  function overlayBlocksVideoSurface() {
+    return (
+      document.body.classList.contains("filter-sheet-open") ||
+      document.body.classList.contains("share-dialog-open")
+    );
+  }
+
+  function suspendVideoForOverlay() {
+    if (!els.video) return;
+    document.body.classList.add("overlay-suspend-video");
+    if (!els.video.paused) {
+      videoResumeAfterOverlay = true;
+      els.video.pause();
+    }
+  }
+
+  function resumeVideoAfterOverlay() {
+    if (overlayBlocksVideoSurface()) return;
+    document.body.classList.remove("overlay-suspend-video");
+    if (videoResumeAfterOverlay && els.video) {
+      videoResumeAfterOverlay = false;
+      els.video.play().catch(() => {});
+    } else {
+      videoResumeAfterOverlay = false;
+    }
+  }
+
   function closeFilterSheet() {
     document.body.classList.remove("filter-sheet-open");
     if (els.filterSheetPanel) els.filterSheetPanel.hidden = true;
@@ -462,6 +504,7 @@
       els.sheetBackdrop.hidden = true;
     }
     if (els.filtersToggleBtn) els.filtersToggleBtn.setAttribute("aria-expanded", "false");
+    resumeVideoAfterOverlay();
   }
 
   function closeShareDialog() {
@@ -475,15 +518,18 @@
       els.sheetBackdrop.hidden = true;
     }
     if (els.shareBtn) els.shareBtn.setAttribute("aria-expanded", "false");
+    resumeVideoAfterOverlay();
   }
 
   function openShareDialog() {
-    closeFilterSheet();
     closePhoneMoreMenu();
     if (els.shareDialog) els.shareDialog.hidden = false;
     if (els.sheetBackdrop) els.sheetBackdrop.hidden = false;
+    // Mark open before closing Filters so resumeVideoAfterOverlay stays suspended.
     document.body.classList.add("share-dialog-open");
+    closeFilterSheet();
     if (els.shareBtn) els.shareBtn.setAttribute("aria-expanded", "true");
+    suspendVideoForOverlay();
   }
 
   function toggleShareDialog() {
@@ -493,13 +539,17 @@
 
   function openFilterSheet() {
     placeFilterForm();
-    closeShareDialog();
     closePhoneMoreMenu();
+    // Keep watch-first: exiting would hide #stage on phone while HLS keeps playing,
+    // and Android's video surface then blocks the sheet + backdrop (BUG-026).
     if (isNarrow()) setChannelsOpen(false);
     document.body.classList.add("filter-sheet-open");
+    // Mark open before closing Share so resumeVideoAfterOverlay stays suspended.
+    closeShareDialog();
     if (els.filterSheetPanel) els.filterSheetPanel.hidden = false;
     if (els.sheetBackdrop) els.sheetBackdrop.hidden = false;
     if (els.filtersToggleBtn) els.filtersToggleBtn.setAttribute("aria-expanded", "true");
+    suspendVideoForOverlay();
   }
 
   function toggleFilterSheet() {
@@ -1543,7 +1593,6 @@
   });
 
   els.filtersToggleBtn?.addEventListener("click", () => {
-    if (state.watchFirst) exitWatchFirst();
     toggleFilterSheet();
   });
   els.favoritesToggleBtn?.addEventListener("click", () => {

@@ -439,6 +439,12 @@ a {
   background: rgba(0, 0, 0, 0.55);
 }
 
+/* Drop Android WebView hardware video surface while sheets/dialogs are open. */
+body.overlay-suspend-video #video {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .share-dialog {
   position: fixed;
   left: 50%;
@@ -1628,12 +1634,42 @@ body.is-phone .phone-more-panel .compact-btn {
 body.is-phone .compact-actions {
   flex-wrap: nowrap;
   gap: 0.3rem;
+  width: 100%;
+}
+
+/* Two-row phone chrome: actions above, full-width search below. */
+body.is-phone.ui-chrome-compact .filter-bar {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "actions"
+    "search";
+  row-gap: 0.45rem;
 }
 
 body.is-phone .filter-bar {
   margin: 0.35rem max(0.45rem, env(safe-area-inset-right, 0px)) 0.35rem
     max(0.45rem, env(safe-area-inset-left, 0px));
   padding: max(0.45rem, env(safe-area-inset-top, 0px)) 0.55rem 0.45rem;
+}
+
+body.is-phone .compact-actions > .compact-btn,
+body.is-phone .compact-actions > .reset-btn,
+body.is-phone .compact-actions > .phone-more-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+body.is-phone .compact-actions > .phone-more-wrap > .phone-more-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+body.is-phone .compact-actions > .compact-btn,
+body.is-phone .compact-actions > .reset-btn {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
 }
 
 body.is-phone .search-wrap input {
@@ -1644,7 +1680,7 @@ body.is-phone .search-wrap input {
 
 body.is-phone .compact-btn,
 body.is-phone .phone-more-btn {
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.35rem;
   font-size: 0.78rem;
   white-space: nowrap;
 }

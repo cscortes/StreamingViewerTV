@@ -36,6 +36,7 @@
 | FEAT-009 | 2026-08-02 | Phone-tier UI under narrow: More overflow menu, denser channel rows, single-column filters, safe-area padding. | Done | 2026-08-02 |
 | BUG-024 | 2026-08-02 | Phone channel drawer clamped to ~220px / translucent, so names were truncated and hard to read. | Fixed | 2026-08-02 |
 | BUG-025 | 2026-08-02 | Fullscreen button does nothing on Android phone (WebView Fullscreen API). | Fixed | 2026-08-02 |
+| BUG-026 | 2026-08-02 | Android: Filters while video playing — sheet missing and UI stuck. | Fixed | 2026-08-02 |
 
 ## Details
 
@@ -788,3 +789,29 @@ Canonical tests:
    `onShowCustomView`.
 
 Canonical tests: `tests/test_compact_and_share_ui.py::test_fullscreen_fallback_wired`.
+
+### BUG-026 — Filters while playing stuck on Android
+
+- **Reported:** 2026-08-02
+- **Status:** Fixed
+- **Fixed:** 2026-08-02
+- **Symptom:** On Android, tapping Filters while a stream is playing does not show the
+  filter sheet, and the UI stops accepting selection taps.
+- **Cause:** Filters called `exitWatchFirst()` first. On phone that applies
+  `stage { display: none }` while HLS keeps playing; Android WebView leaves a
+  hardware video surface above HTML. The sheet/backdrop open in the DOM but are
+  not visible or tappable (backdrop also covers the toolbar).
+- **Fix:** Keep watch-first when opening Filters; pause + hide `#video` while the
+  filter/share overlays are open (`overlay-suspend-video`), then resume on close.
+- **Ships in:** **1.1.2**
+
+#### AI instructions (regression workflow)
+
+1. Filters click handler must call `toggleFilterSheet()` only (no `exitWatchFirst`).
+2. `openFilterSheet` / `openShareDialog` call `suspendVideoForOverlay`.
+3. Phone watch + play + Filters keeps `watch-first`, shows sheet, suspends video.
+4. Contract: `suspendVideoForOverlay`, `overlay-suspend-video` in JS/CSS.
+
+Canonical tests:
+- `tests/test_compact_and_share_ui.py::test_filters_while_playing_does_not_exit_watch_first`
+- `tests/test_ui_filters_playwright.py::test_filters_while_watching_keeps_sheet_usable`

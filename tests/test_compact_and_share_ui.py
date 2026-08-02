@@ -52,8 +52,8 @@ def test_compact_chrome_toolbar_wired():
 def test_compact_actions_order_and_share_beside_details():
     html = INDEX_HTML.read_text(encoding="utf-8")
     compact = html[html.index('id="compactActions"') : html.index("favorites-hint")]
-    assert compact.index("resetFiltersBtnCompact") < compact.index("filtersToggleBtn")
-    assert compact.index("filtersToggleBtn") < compact.index("favoritesToggleBtn")
+    assert compact.index("filtersToggleBtn") < compact.index("resetFiltersBtnCompact")
+    assert compact.index("resetFiltersBtnCompact") < compact.index("favoritesToggleBtn")
     assert compact.index("favoritesToggleBtn") < compact.index("browseToggleBtn")
     assert compact.index("browseToggleBtn") < compact.index("fullscreenBtn")
     assert compact.index("fullscreenBtn") < compact.index("phoneMoreBtn")
@@ -97,9 +97,14 @@ def test_phone_tier_overflow_menu_wired():
     assert "function clearLayoutSidebarWidthVar" in js
     assert 'classList.toggle("is-phone"' in js or "is-phone" in js
     assert "clearLayoutSidebarWidthVar" in js
+    assert "els.fullscreenBtn" in js[js.index("function phoneOverflowItems") : js.index("function closePhoneMoreMenu")]
 
     assert "body.is-phone" in css
     assert ".phone-more-panel" in css
+    assert 'grid-template-areas:\n    "actions"\n    "search"' in css or (
+        'grid-template-areas:' in css and '"actions"' in css and '"search"' in css
+    )
+    assert "body.is-phone.ui-chrome-compact .filter-bar" in css
     assert "body.is-phone.watch-first .player-frame" in css
     assert "body.is-phone:not(.watch-first) .sidebar" in css
     assert "body.is-phone:not(.watch-first) .stage" in css
@@ -133,6 +138,24 @@ def test_fullscreen_fallback_wired():
     assert "onHideCustomView" in main
     assert "enterImmersiveMode" in main
 
+
+def test_filters_while_playing_does_not_exit_watch_first():
+    """BUG-026: Filters must overlay watch mode and suspend the video surface."""
+    js = APP_JS.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "function suspendVideoForOverlay" in js
+    assert "function resumeVideoAfterOverlay" in js
+    assert "overlay-suspend-video" in js
+    assert "overlay-suspend-video" in css
+    assert "body.overlay-suspend-video #video" in css
+    assert "BUG-026" in js
+    # Filters click must not tear down watch-first before opening the sheet.
+    click_idx = js.index('filtersToggleBtn?.addEventListener("click"')
+    click_block = js[click_idx : click_idx + 120]
+    assert "toggleFilterSheet()" in click_block
+    assert "exitWatchFirst()" not in click_block
+    assert "suspendVideoForOverlay()" in js[js.index("function openFilterSheet") :]
 
 def test_rise_in_animation_does_not_pin_sidebar_transform():
     """BUG-022: forwards fill on rise-in kept translateY(0) and blocked hide/show."""
