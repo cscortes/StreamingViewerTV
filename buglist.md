@@ -37,6 +37,8 @@
 | BUG-024 | 2026-08-02 | Phone channel drawer clamped to ~220px / translucent, so names were truncated and hard to read. | Fixed | 2026-08-02 |
 | BUG-025 | 2026-08-02 | Fullscreen button does nothing on Android phone (WebView Fullscreen API). | Fixed | 2026-08-02 |
 | BUG-026 | 2026-08-02 | Android: Filters while video playing — sheet missing and UI stuck. | Fixed | 2026-08-02 |
+| BUG-027 | 2026-08-23 | Favorites mode ANDs with Filters-sheet/search, so starred channels can disappear. | Fixed | 2026-08-23 |
+| FEAT-010 | 2026-08-23 | Android phone: selecting a stream auto-hides the channel list. | Done | 2026-08-23 |
 
 ## Details
 
@@ -621,6 +623,8 @@ Canonical test: `tests/test_release_pipeline.py`.
     `svtv_favorites_v2` (capped at **100**). Legacy `svtv_favorites` int IDs are wiped.
   - Toolbar **Favorites** toggles a favorites-only list via
     `/api/streams?favorite_keys=…` (paginated, catalog-only — no proxy).
+  - Favorites mode ignores search and Filters-sheet options (see **BUG-027**); those
+    selections persist and apply again when Favorites is turned off.
   - **Reset** clears search and filter dropdowns only — it must not clear starred
     channels or turn off the Favorites filter. Stars are removed only by tapping the
     channel’s favorite button.
@@ -815,3 +819,52 @@ Canonical tests: `tests/test_compact_and_share_ui.py::test_fullscreen_fallback_w
 Canonical tests:
 - `tests/test_compact_and_share_ui.py::test_filters_while_playing_does_not_exit_watch_first`
 - `tests/test_ui_filters_playwright.py::test_filters_while_watching_keeps_sheet_usable`
+
+### BUG-027 — Favorites mode hidden by Filters/search
+
+- **Reported:** 2026-08-23
+- **Status:** Fixed
+- **Fixed:** 2026-08-23
+- **Symptom:** With **Favorites** on, choosing a Filters-sheet option (e.g. Category) or
+  search can empty the list even when starred channels exist.
+- **Cause:** `selectedFilters()` always sent form fields and `q` alongside
+  `favorite_keys`, so `/api/streams` returned the intersection.
+- **Fix:** In Favorites mode the client sends only `source` + `favorite_keys`. Filter
+  dropdowns, search, and the badge stay as-is and apply again when Favorites is off.
+- **Ships in:** **1.2.0**
+
+#### AI instructions (regression workflow)
+
+1. `selectedFilters()` returns before reading the filter form / `q` when
+   `state.favoritesOnly` is true.
+2. Playwright: star a non-movie, turn Favorites on, set Category=movies — starred
+   channel remains listed.
+
+Canonical tests: `tests/test_favorites.py::test_selected_filters_skips_form_and_search_in_favorites_mode`,
+`tests/test_ui_filters_playwright.py::test_favorites_filter_and_reset_preserve_stars`
+
+### FEAT-010 — Android phone auto-hides the list on stream select
+
+- **Reported:** 2026-08-23
+- **Status:** Done
+- **Fixed:** 2026-08-23
+- **Notes:**
+  - On the Android APK at phone size (`data-platform="android"` + `isPhone()`), selecting a
+    stream calls `enterWatchFirst()` so the channel list hides and the player fills the
+    screen.
+  - Android tablets, desktop, and phone-width browsers that are not the Android app keep
+    the previous behavior (list stays open until **Hide** / **T**).
+  - **Show** (toolbar or left-edge tab) still brings the list back.
+- **Ships in:** **1.2.0**
+
+#### AI instructions (regression workflow)
+
+1. `selectStream` calls `enterWatchFirst()` only when `IS_ANDROID && isPhone()`.
+2. Playwright @ 390×844 with `STREAM_VIEWER_ANDROID=1`: click a channel → `watch-first`,
+   sidebar off-screen, stage visible, Hide button reads **Show**.
+3. Same select without the Android env, and Android tablet @ 820×1180, must **not**
+   enter watch-first.
+
+Canonical tests: `tests/test_compact_and_share_ui.py::test_android_phone_select_enters_watch_first_wired`,
+`tests/test_ui_filters_playwright.py` FEAT-010 cases.
+

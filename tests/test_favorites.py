@@ -313,3 +313,17 @@ def test_reset_filters_preserves_favorites():
     assert "localStorage.removeItem" not in reset_body
     assert "kept.favoritesOnly = true" in reset_body
     assert "els.filterForm.reset()" in reset_body
+
+
+def test_selected_filters_skips_form_and_search_in_favorites_mode():
+    """Favorites mode sends source + favorite_keys only — not Filters-sheet fields or q."""
+    js = APP_JS.read_text(encoding="utf-8")
+    start = js.index("function selectedFilters()")
+    body = js[start : js.index("\n  }", start) + 4]
+    fav_return = body.index("if (state.favoritesOnly)")
+    form_loop = body.index("new FormData(els.filterForm)")
+    search_q = body.index('params.set("q", q)')
+    assert fav_return < form_loop
+    assert "return params;" in body[fav_return:form_loop]
+    assert search_q > form_loop
+    assert 'params.set("favorite_keys"' in body[fav_return:form_loop]

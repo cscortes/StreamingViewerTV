@@ -343,16 +343,8 @@
     }
   }
 
-  function hasNarrowingFilters() {
-    if (els.searchInput.value.trim()) return true;
-    for (const select of els.filterForm.querySelectorAll("select[name]")) {
-      if (select.value) return true;
-    }
-    return false;
-  }
-
   function maybePruneFavorites() {
-    if (!state.favoritesOnly || hasNarrowingFilters()) return;
+    if (!state.favoritesOnly) return;
     if (state.items.length < state.total) return;
     const alive = new Set(
       state.items.map((item) => String(item.favorite_key || "").toLowerCase())
@@ -758,16 +750,19 @@
 
   function selectedFilters() {
     const params = new URLSearchParams();
+    if (state.source) params.set("source", state.source);
+    if (state.favoritesOnly) {
+      if (state.favorites.size) {
+        params.set("favorite_keys", [...state.favorites].join(","));
+      }
+      return params;
+    }
     const formData = new FormData(els.filterForm);
     for (const [key, value] of formData.entries()) {
       if (value) params.append(key, value);
     }
     const q = els.searchInput.value.trim();
     if (q) params.set("q", q);
-    if (state.source) params.set("source", state.source);
-    if (state.favoritesOnly && state.favorites.size) {
-      params.set("favorite_keys", [...state.favorites].join(","));
-    }
     return params;
   }
 
@@ -1185,6 +1180,9 @@
       return;
     }
     const stream = await response.json();
+    // Android phones: hide the list so the player can use the small screen.
+    // Tablets, desktop, and non-Android phone-width browsers keep the list open.
+    if (IS_ANDROID && isPhone()) enterWatchFirst();
     playStream(stream);
   }
 

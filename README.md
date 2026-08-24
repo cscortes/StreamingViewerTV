@@ -68,7 +68,7 @@ Grab a newer release from the [Releases page](../../releases) for fresher channe
 - **Search** in the slim toolbar to filter by channel name or metadata.
 - **Filters** (category, country, language, quality, etc.) open from the **Filters** button (not a permanent row of dropdowns).
 - On wide desktop, the channel list stays in a **docked, resizable sidebar** while browsing. On phones/tablets (narrow viewports), the list opens as an overlay drawer.
-- Click any channel to start watching. The channel list stays open until you collapse it with **Hide channels** or **T**. Use **Show channels** (toolbar or the left-edge tab) or **T** again to bring the list back.
+- Click any channel to start watching. The channel list stays open until you collapse it with **Hide channels** or **T**, except on **Android phones**, where picking a channel hides the list so the player can fill the screen. Use **Show** / **Show channels** (toolbar or the left-edge tab) or **T** again to bring the list back.
 - Press **F** to toggle **Fullscreen** (also in the toolbar next to **Hide channels**).
 - Star channels to save favorites (stored in this browser only). Use **Favorites** to show only starred channels.
 - The status bar at the bottom shows essentials; tap **Share** for the download QR, or **Details** for the full stats.
