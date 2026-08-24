@@ -182,3 +182,14 @@ def test_share_dialog_wiring_and_qr_asset():
     assert "function closeShareDialog" in js
     assert "function toggleShareDialog" in js
     assert "share-dialog-open" in js
+
+
+def test_android_phone_select_enters_watch_first_wired():
+    """FEAT-010: only Android phones auto-hide the list after selecting a stream."""
+    js = APP_JS.read_text(encoding="utf-8")
+    start = js.index("async function selectStream(")
+    body = js[start : js.index("\n  }", start) + 4]
+    assert "IS_ANDROID && isPhone()" in body
+    assert "enterWatchFirst()" in body
+    assert body.index("IS_ANDROID && isPhone()") < body.index("playStream(stream)")
+

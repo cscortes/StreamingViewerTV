@@ -134,6 +134,13 @@ def ui_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         thread.join(timeout=10)
 
 
+@pytest.fixture()
+def android_ui_server(ui_server: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Same catalog server with the Android APK platform flag."""
+    monkeypatch.setenv("STREAM_VIEWER_ANDROID", "1")
+    return ui_server
+
+
 def _open_filter_sheet(page: Page) -> None:
     """Compact chrome keeps filters in a sheet until the Filters button is pressed."""
     toggle = page.locator("#filtersToggleBtn")
@@ -242,10 +249,10 @@ def test_favorites_filter_and_reset_preserve_stars(ui_server: str, page: Page) -
 
     _open_filter_sheet(page)
     page.locator("#filter-topics").select_option("movies")
-    # Favorites ∩ movies is empty for this fixture.
-    page.wait_for_function(
-        "() => document.querySelectorAll('#streamList .stream-item').length === 0"
-    )
+    # Favorites mode ignores Filters-sheet options; starred News stays listed.
+    expect(page.locator("#streamList")).to_contain_text("Demo News")
+    expect(page.locator("#streamList")).not_to_contain_text("Demo Movie")
+    expect(page.locator("#streamList .stream-item")).to_have_count(1)
     page.locator("#filterSheetDoneBtn").click()
     expect(page.locator("#filterSheetPanel")).to_be_hidden()
 
@@ -598,3 +605,67 @@ def test_filters_while_watching_keeps_sheet_usable(ui_server: str, page: Page) -
     page.locator("#browseToggleBtn").click()
     expect(page.locator("body")).not_to_have_class(re.compile(r"watch-first"))
     expect(page.locator("#streamList .stream-item").first).to_be_visible()
+
+
+def test_android_phone_select_stream_hides_channel_list(
+    android_ui_server: str, page: Page
+) -> None:
+    """FEAT-010: Android phone hides the list when a stream is selected."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(android_ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_attribute("data-platform", "android")
+    expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"watch-first"))
+
+    page.locator("#streamList .stream-item .stream-select").first.click()
+    expect(page.locator("#streamList .stream-item").first).to_have_class(re.compile(r"active"))
+    expect(page.locator("body")).to_have_class(re.compile(r"watch-first"))
+    expect(page.locator("#browseToggleBtn")).to_have_text("Show")
+    page.wait_for_function(
+        """() => {
+          const r = document.getElementById('sidebar').getBoundingClientRect();
+          const stage = getComputedStyle(document.getElementById('stage')).display;
+          return r.right <= 1 && stage !== 'none';
+        }"""
+    )
+
+
+def test_phone_select_stream_keeps_list_without_android(
+    ui_server: str, page: Page
+) -> None:
+    """FEAT-010: phone-width browsers that are not the Android app keep the list."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).not_to_have_attribute("data-platform", "android")
+    expect(page.locator("body")).to_have_class(re.compile(r"is-phone"))
+
+    page.locator("#streamList .stream-item .stream-select").first.click()
+    expect(page.locator("#streamList .stream-item").first).to_have_class(re.compile(r"active"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"watch-first"))
+    expect(page.locator("#browseToggleBtn")).to_have_text("Hide")
+    expect(page.locator("#streamList .stream-item").first).to_be_visible()
+
+
+def test_android_tablet_select_stream_keeps_channel_list(
+    android_ui_server: str, page: Page
+) -> None:
+    """FEAT-010: Android tablets keep the channel list after selecting a stream."""
+    page.set_viewport_size({"width": 820, "height": 1180})
+    page.goto(android_ui_server, wait_until="networkidle")
+    page.wait_for_selector("#streamList .stream-item")
+
+    expect(page.locator("body")).to_have_attribute("data-platform", "android")
+    expect(page.locator("body")).to_have_class(re.compile(r"is-narrow"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"is-phone"))
+
+    # Tablet browse drawer tucks the first row under the search field; click via DOM.
+    page.locator("#streamList .stream-item .stream-select").first.evaluate("el => el.click()")
+    expect(page.locator("#streamList .stream-item").first).to_have_class(re.compile(r"active"))
+    expect(page.locator("body")).not_to_have_class(re.compile(r"watch-first"))
+    expect(page.locator("#browseToggleBtn")).to_have_text("Hide channels")
+    expect(page.locator("#streamList .stream-item").first).to_be_visible()
+
